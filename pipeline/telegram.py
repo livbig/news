@@ -1,4 +1,5 @@
 import logging
+import re
 
 import httpx
 
@@ -52,16 +53,31 @@ def get_chat_ids() -> list[dict]:
     return list(chats.values())
 
 
+def _post(chat_text: str, parse_mode: str | None) -> bool:
+    body = {"chat_id": config.TELEGRAM_CHAT_ID, "text": chat_text}
+    if parse_mode:
+        body["parse_mode"] = parse_mode
+    response = httpx.post(
+        f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessage",
+        json=body,
+        timeout=30,
+    )
+    return response.status_code == 200
+
+
+def _strip_tags(text: str) -> str:
+    return re.sub(r"</?[a-zA-Z][^>]*>", "", text)
+
+
 def send(text: str) -> bool:
     if not (config.TELEGRAM_TOKEN and config.TELEGRAM_CHAT_ID):
         log.warning("TELEGRAM_TOKEN/CHAT_ID не заданы — доставка в mock-режиме")
         return False
     for chunk in chunk_text(text):
-        response = httpx.post(
-            f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": config.TELEGRAM_CHAT_ID, "text": chunk},
-            timeout=30,
-        )
-        response.raise_for_status()
+        if not _post(chunk, parse_mode="HTML"):
+            if not _post(_strip_tags(chunk), parse_mode=None):
+                log.error("sendMessage не прошёл даже в plain-режиме")
+                return False
+            log.warning("HTML не принят (ломаная разметка?) — отправлено как plain text")
         log.info("Отправлено сообщение %d символов", len(chunk))
     return True

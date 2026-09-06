@@ -30,7 +30,11 @@ def build_digest(conn) -> str | None:
         f"[{category}] {title} — {source} ({published or 'нет даты'}) — {url}"
         for _, title, url, category, source, published in rows
     ]
-    digest = llm.summarize("\n".join(items_lines))
+    header = (
+        f"С последнего дайджеста накоплено {len(rows)} новостей."
+        " Напиши по ним сводку-нарратив по правилам системы.\n"
+    )
+    digest = llm.summarize(header + "\n".join(items_lines))
 
     conn.execute(f"UPDATE articles SET in_digest = 1 WHERE id IN ({','.join('?' * len(rows))})",
                  [row[0] for row in rows])
@@ -40,15 +44,15 @@ def build_digest(conn) -> str | None:
 
 
 def deliver(digest: str) -> bool:
+    config.DIGEST_DIR.mkdir(exist_ok=True)
+    out = Path(config.DIGEST_DIR) / f"digest_{datetime.now():%Y%m%d_%H%M}.txt"
+    out.write_text(digest, encoding="utf-8")
     try:
         sent = telegram.send(digest)
     except Exception as exc:
-        log.error("Доставка в Telegram упала: %s — сохраняю в digests/", exc)
+        log.error("Доставка в Telegram упала: %s — сводка в %s", exc, out)
         sent = False
     if not sent:
-        config.DIGEST_DIR.mkdir(exist_ok=True)
-        out = Path(config.DIGEST_DIR) / f"digest_{datetime.now():%Y%m%d_%H%M}.txt"
-        out.write_text(digest, encoding="utf-8")
         print(digest)
-        print(f"\n[сохранено в {out}]")
+    print(f"\n[сохранено в {out}]")
     return sent
