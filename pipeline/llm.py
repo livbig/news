@@ -28,28 +28,33 @@ SYSTEM_PROMPT = """Ты — редактор личного новостного
 def summarize(items_text: str) -> str:
     if not config.LLM_API_KEY:
         log.warning("LLM_API_KEY не задан — mock-сводка")
-        return mock_summary(items_text)
-    response = httpx.post(
-        f"{config.LLM_BASE_URL}/chat/completions",
-        headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
-        json={
-            "model": config.LLM_MODEL,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": items_text},
-            ],
-        },
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
+        return mock_summary(items_text, reason="LLM_API_KEY не задан")
+    try:
+        response = httpx.post(
+            f"{config.LLM_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
+            json={
+                "model": config.LLM_MODEL,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": items_text},
+                ],
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:300]
+        log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)
+        return mock_summary(items_text, reason=f"LLM API error {exc.response.status_code}: {body}")
 
 
-def mock_summary(items_text: str) -> str:
-    lines = ["📰 MOCK-сводка (LLM_API_KEY не задан)", ""]
+def mock_summary(items_text: str, reason: str = "LLM_API_KEY не задан") -> str:
+    lines = [f"📰 MOCK-сводка ({reason})", ""]
     for line in items_text.splitlines():
         if line.strip():
             lines.append(f"• {line.strip()}")
     lines.append("")
-    lines.append("💡 Итог: заполните LLM_API_KEY в .env для настоящей сводки.")
+    lines.append("💡 Итог: mock-сводка, причина выше. Проверьте баланс/доступность LLM API.")
     return "\n".join(lines)

@@ -29,6 +29,29 @@ def chunk_text(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
     return chunks
 
 
+def get_chat_ids() -> list[dict]:
+    response = httpx.get(
+        f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/getUpdates",
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(f"Telegram API error: {payload}")
+    chats: dict[int, dict] = {}
+    for update in payload.get("result", []):
+        msg = update.get("message") or update.get("edited_message") or update.get("channel_post")
+        if not msg:
+            continue
+        chat = msg["chat"]
+        chats[chat["id"]] = {
+            "id": chat["id"],
+            "type": chat.get("type", "?"),
+            "name": chat.get("title") or chat.get("username") or chat.get("first_name") or "",
+        }
+    return list(chats.values())
+
+
 def send(text: str) -> bool:
     if not (config.TELEGRAM_TOKEN and config.TELEGRAM_CHAT_ID):
         log.warning("TELEGRAM_TOKEN/CHAT_ID не заданы — доставка в mock-режиме")

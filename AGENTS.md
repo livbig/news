@@ -7,6 +7,9 @@
 - `python3 -m pipeline run` — собрать новости в news.db
 - `python3 -m pipeline digest` — сформировать и отправить сводку (без токена TG — сохранить в digests/ и вывести в stdout)
 - `python3 -m pipeline check` — проверка здоровья всех фидов
+- `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
+
+Лог работы: `LOG.md` — обновлять при каждой итерации.
 
 ## Конфигурация
 
