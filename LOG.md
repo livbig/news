@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-09-06, сессия 8 — launchd-автозапуск бота
+
+**Сделано:**
+- `~/Library/LaunchAgents/com.fifth.newsbot.plist`: RunAtLoad + KeepAlive (рестарт при
+  падении, ThrottleInterval 10с), WorkingDirectory = проект, python3 абсолютным путём
+  (/opt/homebrew/bin/python3), stdout/stderr → logs/launchd.{out,err}.
+- Планировщик стал «догоняющим»: _next_fire() — следующая сводка считается от текущего
+  момента; если Mac проспал слот (09:00/21:00), сводка уйдёт сразу после пробуждения.
+  Юнит-тесты ✓.
+- Сервис поднят (launchctl bootstrap gui/501), единственный потребитель getUpdates —
+  сессионный бот Kilo остановлен (иначе 409 Conflict; конфликт наблюдался и ушёл). ✓
+- Отладочный цикл описан в AGENTS.md: bootout → `python3 -m pipeline bot` (живой вывод)
+  → bootstrap; правки кода подхватываются kickstart -k.
+
+**Как править код дальше:** редактируем pipeline/ → `launchctl kickstart -k
+gui/501/com.fifth.newsbot` → смотрим logs/run.log. Для глубокой отладки — bootout агента
+  и ручной запуск в терминале.
+
+---
+
 ## 2026-09-06, сессия 7 — «широта, не глубина» + починка HTML-доставки
 
 **Фидбек:** сводку длиннее делать за счёт ОХВАТА (все темы/новости упомянуты), не за счёт

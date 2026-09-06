@@ -11,6 +11,18 @@
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.
 
+## Бот-демон (launchd, автозапуск при входе в систему)
+
+- Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`.
+  Один потребитель getUpdates: перед ручным запуском бота останови агент (иначе 409).
+- Остановить агента (для отладки): `launchctl bootout gui/501/com.fifth.newsbot`
+- Ручной прогон с живым выводом: `python3 -m pipeline bot`
+- Запустить агент снова: `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`
+- Перезапуск после правок кода: `launchctl kickstart -k gui/501/com.fifth.newsbot`
+- Статус: `launchctl print gui/501/com.fifth.newsbot | grep state`
+- Логи: `logs/run.log` (основной), `logs/launchd.err` (ранние крэши). Код правится прямо
+  в `pipeline/` — агент подхватывает изменения после перезапуска (kickstart).
+
 ## Конфигурация
 
 - `feeds.txt` — строки `URL|категория`. Категории: `metals_fx, usmarket, wsb, ipo_ai_bio, tech_ai, macro, geopolitics, crypto`

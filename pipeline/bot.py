@@ -1,7 +1,7 @@
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -110,15 +110,27 @@ def handle_message(conn, msg: dict) -> None:
             handle_chat(conn, text)
 
 
+def _next_fire(times: set[str], after: datetime) -> datetime:
+    """Ближайший слот после `after` (сегодня или завтра)."""
+    for t in sorted(times):
+        h, m = map(int, t.split(":"))
+        candidate = after.replace(hour=h, minute=m, second=0, microsecond=0)
+        if candidate > after:
+            return candidate
+    t = sorted(times)[0]
+    h, m = map(int, t.split(":"))
+    return (after + timedelta(days=1)).replace(hour=h, minute=m, second=0, microsecond=0)
+
+
 def run_bot():
     if not config.TELEGRAM_TOKEN:
         log.error("TELEGRAM_TOKEN не задан — бот не стартует")
         return
     conn = db.connect()
     offset = 0
-    fired: set[str] = set()
     schedule = {s.strip() for s in config.DIGEST_TIMES.split(",") if s.strip()}
-    log.info("Бот запущен. Расписание сводок: %s", ", ".join(sorted(schedule)) or "нет")
+    next_fire = _next_fire(schedule, datetime.now()) if schedule else None
+    log.info("Бот запущен. Следующая сводка: %s", next_fire or "нет расписания")
     while True:
         try:
             for upd in get_updates(offset):
@@ -129,10 +141,8 @@ def run_bot():
         except Exception as exc:
             log.error("getUpdates: %s (VPN?) — повтор через 10с", exc)
             time.sleep(10)
-        now = datetime.now()
-        slot = f"{now:%Y-%m-%d %H:%M}"
-        if now.strftime("%H:%M") in schedule and slot not in fired:
-            fired.add(slot)
+        # догоняющая сводка: сработает и после сна Mac, если слот проспан
+        if next_fire and datetime.now() >= next_fire:
             try:
                 new = collect(conn)
                 result = digest.build_digest(conn)
@@ -141,3 +151,4 @@ def run_bot():
                     log.info("Сводка по расписанию (+%d статей)", new)
             except Exception as exc:
                 log.error("Сводка по расписанию упала: %s", exc)
+            next_fire = _next_fire(schedule, datetime.now())
