@@ -31,19 +31,22 @@ def summarize(items_text: str) -> str:
         return mock_summary(items_text, reason="LLM_API_KEY не задан")
     try:
         response = httpx.post(
-            f"{config.LLM_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
+            f"{config.LLM_BASE_URL}/v1/messages",
+            headers={
+                "Authorization": f"Bearer {config.LLM_API_KEY}",
+                "anthropic-version": "2023-06-01",
+            },
             json={
                 "model": config.LLM_MODEL,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": items_text},
-                ],
+                "max_tokens": 16000,
+                "system": SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": items_text}],
             },
-            timeout=120,
+            timeout=180,
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        content = response.json()["content"]
+        return "".join(block["text"] for block in content if block.get("type") == "text")
     except httpx.HTTPStatusError as exc:
         body = exc.response.text[:300]
         log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)

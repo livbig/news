@@ -40,7 +40,11 @@ def build_digest(conn) -> str | None:
 
 
 def deliver(digest: str) -> bool:
-    sent = telegram.send(digest)
+    try:
+        sent = telegram.send(digest)
+    except Exception as exc:
+        log.error("Доставка в Telegram упала: %s — сохраняю в digests/", exc)
+        sent = False
     if not sent:
         config.DIGEST_DIR.mkdir(exist_ok=True)
         out = Path(config.DIGEST_DIR) / f"digest_{datetime.now():%Y%m%d_%H%M}.txt"
