@@ -5,7 +5,7 @@ from datetime import datetime
 
 import httpx
 
-from . import channels, config, db, digest, fetch, telegram
+from . import channels, config, db, digest, fetch, llm, telegram
 
 log = logging.getLogger("bot")
 
@@ -36,6 +36,27 @@ def get_updates(offset: int) -> list[dict]:
 
 def collect(conn) -> int:
     return fetch.fetch_all(conn) + channels.fetch_all_channels(conn)
+
+
+def handle_chat(conn, text: str) -> None:
+    """Свободный вопрос владельца: контекст = последние статьи ленты + история диалога."""
+    conn.execute("INSERT INTO chat_history (role, text) VALUES ('user', ?)", (text,))
+    history = conn.execute(
+        "SELECT role, text FROM chat_history ORDER BY id DESC LIMIT 12"
+    ).fetchall()[::-1]
+    rows = conn.execute(
+        "SELECT title, url, category, source FROM articles ORDER BY id DESC LIMIT 120"
+    ).fetchall()
+    context = "\n".join(f"[{c}] {t} — {s} — {u}" for t, u, c, s in rows)
+    try:
+        answer = llm.chat([{"role": r, "content": t} for r, t in history], context)
+    except Exception as exc:
+        log.error("Ошибка LLM в диалоге: %s", exc)
+        telegram.send(f"LLM недоступен: {exc}")
+        return
+    conn.execute("INSERT INTO chat_history (role, text) VALUES ('assistant', ?)", (answer,))
+    conn.commit()
+    telegram.send(answer)
 
 
 def handle_message(conn, msg: dict) -> None:
@@ -75,16 +96,18 @@ def handle_message(conn, msg: dict) -> None:
             words = text.split()
             category = words[1] if len(words) > 1 and words[1] in CATEGORIES else "tech_ai"
             try:
-                added = channels.fetch_channel(conn, name, category)
                 conn.execute(
                     "INSERT OR IGNORE INTO channel_subs (name, category) VALUES (?, ?)", (name, category)
                 )
                 conn.commit()
+                added = channels.fetch_channel(conn, name, category)
                 telegram.send(f"Подписался на t.me/{name} [{category}]. Свежих постов: {added}")
             except Exception as exc:
+                conn.execute("DELETE FROM channel_subs WHERE name = ?", (name,))
+                conn.commit()
                 telegram.send(f"Не получилось прочитать t.me/{name}: {exc}")
         else:
-            telegram.send(HELP)
+            handle_chat(conn, text)
 
 
 def run_bot():

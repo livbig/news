@@ -27,8 +27,39 @@ SYSTEM_PROMPT = """Ты — редактор личного новостного
    биотех — развёрнуто; геополитика — только направление («в какую сторону весы»);
    крипта — максимально коротко.
 7. В конце секция «💡 Итог»: 2-3 предложения — общий фон и к чему быть готовым.
-8. Пиши по-русски, тикеры/термины оставляй как есть. Объём растёт с числом новостей:
-   20-40 новостей — это 3000-6000 символов готового текста."""
+8. Пиши по-русски, тикеры/термины оставляй как есть. Объём: 20-40 новостей — это
+   6000-9000 символов готового текста; длиннее — за счёт деталей, цифр и причинно-
+   следственных связей из новостей, а не вводных фраз. Воду не лей."""
+
+CHAT_SYSTEM_PROMPT = """Ты — ассистент владельца личного новостного дайджест-бота.
+Он отвечает тебе текстом в Telegram — ты получаешь его вопрос, контекст последних
+статей его ленты (с ссылками) и историю диалога.
+
+Правила:
+1. Если тема есть в ленте — отвечай с деталями из статей и инлайн-ссылками
+   <a href="URL">словами</a>. Разрешены только теги <a>, <b>, <i>.
+2. Если в ленте темы нет — отвечай своими знаниями и добавь в конце «(не из ленты)».
+3. По-русски, кратко и по делу, без приветствий и извинений."""
+
+
+def _call(system: str, messages: list[dict], max_tokens: int) -> str:
+    response = httpx.post(
+        f"{config.LLM_BASE_URL}/v1/messages",
+        headers={
+            "Authorization": f"Bearer {config.LLM_API_KEY}",
+            "anthropic-version": "2023-06-01",
+        },
+        json={
+            "model": config.LLM_MODEL,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": messages,
+        },
+        timeout=180,
+    )
+    response.raise_for_status()
+    content = response.json()["content"]
+    return "".join(block["text"] for block in content if block.get("type") == "text")
 
 
 def summarize(items_text: str) -> str:
@@ -36,27 +67,16 @@ def summarize(items_text: str) -> str:
         log.warning("LLM_API_KEY не задан — mock-сводка")
         return mock_summary(items_text, reason="LLM_API_KEY не задан")
     try:
-        response = httpx.post(
-            f"{config.LLM_BASE_URL}/v1/messages",
-            headers={
-                "Authorization": f"Bearer {config.LLM_API_KEY}",
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": config.LLM_MODEL,
-                "max_tokens": 16000,
-                "system": SYSTEM_PROMPT,
-                "messages": [{"role": "user", "content": items_text}],
-            },
-            timeout=180,
-        )
-        response.raise_for_status()
-        content = response.json()["content"]
-        return "".join(block["text"] for block in content if block.get("type") == "text")
+        return _call(SYSTEM_PROMPT, [{"role": "user", "content": items_text}], 16000)
     except httpx.HTTPStatusError as exc:
         body = exc.response.text[:300]
         log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)
         return mock_summary(items_text, reason=f"LLM API error {exc.response.status_code}: {body}")
+
+
+def chat(messages: list[dict], news_context: str) -> str:
+    system = CHAT_SYSTEM_PROMPT + "\n\nКонтекст последних статей ленты:\n" + news_context
+    return _call(system, messages, 3000)
 
 
 def mock_summary(items_text: str, reason: str = "LLM_API_KEY не задан") -> str:

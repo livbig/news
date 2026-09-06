@@ -34,17 +34,59 @@ def parse_page(html: str) -> list[tuple[str, str, str]]:
     return posts
 
 
-def fetch_channel(conn, name: str, category: str) -> int:
-    response = httpx.get(
-        f"https://t.me/s/{name}", headers=fetch.HEADERS, timeout=20, follow_redirects=True
-    )
+def _post_num(post_id: str) -> int:
+    tail = post_id.rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def _fetch_page(name: str, before: int | None) -> list[tuple[str, str, str]]:
+    url = f"https://t.me/s/{name}" + (f"?before={before}" if before else "")
+    response = httpx.get(url, headers=fetch.HEADERS, timeout=20, follow_redirects=True)
     response.raise_for_status()
+    return parse_page(response.text)
+
+
+def fetch_channel(conn, name: str, category: str) -> int:
+    """Без пропусков: идём назад страницами t.me/s (?before=) до последнего
+    обработанного поста (last_post_id), максимум 6 страниц за прогон."""
+    row = conn.execute("SELECT last_post_id FROM channel_subs WHERE name = ?", (name,)).fetchone()
+    last_seen = row[0] if row and row[0] else 0
+
+    pages: list[tuple[str, str, str]] = []
+    before = None
+    for _ in range(6):
+        try:
+            page = _fetch_page(name, before)
+        except httpx.HTTPError:
+            if before is None:
+                raise
+            break
+        if not page:
+            break
+        pages = page + pages
+        nums = [n for n in (_post_num(p) for p, _, _ in page) if n]
+        if not nums:
+            break
+        oldest = min(nums)
+        if last_seen and oldest <= last_seen:
+            break
+        if not last_seen or len(page) < 2:
+            break
+        before = oldest
+
     added = 0
-    for post_id, dt, text in parse_page(response.text):
+    max_id = last_seen
+    for post_id, dt, text in pages:
+        n = _post_num(post_id)
+        if n > max_id:
+            max_id = n
+        if last_seen and n and n <= last_seen:
+            continue
         url = f"https://t.me/{post_id}"
-        title = text[:160]
-        if db.insert_article(conn, url, title, category, source=f"t.me/{name}", published=dt):
+        if db.insert_article(conn, url, text[:160], category, source=f"t.me/{name}", published=dt):
             added += 1
+    if max_id > (last_seen or 0):
+        conn.execute("UPDATE channel_subs SET last_post_id = ? WHERE name = ?", (max_id, name))
     conn.commit()
     return added
 

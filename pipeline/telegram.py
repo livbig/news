@@ -9,24 +9,63 @@ log = logging.getLogger("telegram")
 
 MAX_MESSAGE_LEN = 4000
 
+HEADER_RE = re.compile(r"^[^\w\s]")
+
+
+def _blocks(text: str) -> list[str]:
+    """Разбивка на блоки: новый блок начинается со строки-заголовка (эмодзи/символ)."""
+    blocks, current = [], []
+    for line in text.splitlines():
+        if line.strip() and HEADER_RE.match(line) and current:
+            blocks.append("\n".join(current).strip("\n"))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current).strip("\n"))
+    return [b for b in blocks if b.strip()]
+
+
+def _split_long(block: str, limit: int) -> list[str]:
+    """Блок длиннее лимита режем по абзацам, в крайнем случае — по строкам/символам."""
+    if len(block) <= limit:
+        return [block]
+    pieces, cur = [], ""
+    for para in block.split("\n\n"):
+        while len(para) > limit:
+            cut = para.rfind("\n", 0, limit)
+            cut = cut if cut > 0 else limit
+            pieces.append(para[:cut])
+            para = para[cut:].lstrip("\n")
+        candidate = f"{cur}\n\n{para}" if cur else para
+        if len(candidate) > limit and cur:
+            pieces.append(cur)
+            cur = para
+        else:
+            cur = candidate
+    if cur:
+        pieces.append(cur)
+    return pieces
+
 
 def chunk_text(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
-    chunks, current = [], ""
-    for paragraph in text.split("\n\n"):
-        candidate = f"{current}\n\n{paragraph}" if current else paragraph
-        while len(candidate) > limit:
-            if current:
-                chunks.append(current)
-                current, candidate = "", paragraph
+    """Каждое сообщение начинается с начала блока (секции), не с середины текста.
+    Если блок длиннее лимита, его продолжение открывается заголовком «(продолжение)»."""
+    chunks, cur = [], ""
+    for block in _blocks(text):
+        header = block.split("\n", 1)[0]
+        pieces = _split_long(block, limit - len(header) - 20)
+        for i, piece in enumerate(pieces):
+            if i > 0:
+                piece = f"{header} (продолжение)\n\n{piece}"
+            candidate = f"{cur}\n\n{piece}" if cur else piece
+            if len(candidate) > limit and cur:
+                chunks.append(cur)
+                cur = piece
             else:
-                cut = paragraph.rfind("\n", 0, limit)
-                cut = cut if cut > 0 else limit
-                chunks.append(paragraph[:cut])
-                paragraph = paragraph[cut:].lstrip("\n")
-                candidate = paragraph
-        current = candidate
-    if current:
-        chunks.append(current)
+                cur = candidate
+    if cur:
+        chunks.append(cur)
     return chunks
 
 

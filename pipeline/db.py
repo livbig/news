@@ -18,7 +18,14 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE TABLE IF NOT EXISTS channel_subs (
     name TEXT PRIMARY KEY,
     category TEXT NOT NULL DEFAULT 'tech_ai',
+    last_post_id INTEGER NOT NULL DEFAULT 0,
     added_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS chat_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
 );
 """
 
@@ -26,6 +33,10 @@ CREATE TABLE IF NOT EXISTS channel_subs (
 def connect():
     conn = sqlite3.connect(config.DB_PATH)
     conn.executescript(SCHEMA)
+    try:
+        conn.execute("ALTER TABLE channel_subs ADD COLUMN last_post_id INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 
