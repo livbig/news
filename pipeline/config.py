@@ -33,6 +33,8 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
 
 MAX_ARTICLES_PER_FEED = 30
 
+DIGEST_TIMES = os.environ.get("DIGEST_TIMES", "09:00,21:00")
+
 
 def setup_logging():
     LOG_DIR.mkdir(exist_ok=True)

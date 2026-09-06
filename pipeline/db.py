@@ -15,6 +15,11 @@ CREATE TABLE IF NOT EXISTS articles (
     fetched_at TEXT DEFAULT (datetime('now')),
     in_digest INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS channel_subs (
+    name TEXT PRIMARY KEY,
+    category TEXT NOT NULL DEFAULT 'tech_ai',
+    added_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 

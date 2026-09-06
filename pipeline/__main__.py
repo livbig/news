@@ -1,13 +1,13 @@
 import argparse
 import sys
 
-from . import config, db, digest, fetch, telegram
+from . import bot, channels, config, db, digest, fetch, telegram
 from .config import setup_logging
 
 
 def cmd_run():
     conn = db.connect()
-    new = fetch.fetch_all(conn)
+    new = fetch.fetch_all(conn) + channels.fetch_all_channels(conn)
     print(f"Готово: +{new} новых статей")
     conn.close()
 
@@ -54,13 +54,17 @@ def cmd_chatid():
     print("\nСкопируйте нужный id в TELEGRAM_CHAT_ID в .env")
 
 
+def cmd_bot():
+    bot.run_bot()
+
+
 def main():
     setup_logging()
     parser = argparse.ArgumentParser(prog="pipeline", description="News digest pipeline")
-    parser.add_argument("command", choices=["run", "digest", "check", "chatid"])
+    parser.add_argument("command", choices=["run", "digest", "check", "chatid", "bot"])
     args = parser.parse_args()
 
-    commands = {"run": cmd_run, "digest": cmd_digest, "check": cmd_check, "chatid": cmd_chatid}
+    commands = {"run": cmd_run, "digest": cmd_digest, "check": cmd_check, "chatid": cmd_chatid, "bot": cmd_bot}
     commands[args.command]()
 
 
