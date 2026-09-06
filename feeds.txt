@@ -1,0 +1,41 @@
+# Формат: URL|категория
+# Категории: metals_fx usmarket wsb ipo_ai_bio tech_ai macro geopolitics crypto
+
+# --- Макро, центробанки, регулирование ---
+https://www.federalreserve.gov/feeds/press_all.xml|macro
+https://www.sec.gov/news/pressreleases.rss|macro
+
+# --- Металлы и валюты (глубоко) ---
+https://www.investing.com/rss/commodities.rss|metals_fx
+https://www.investing.com/rss/news_1.rss|metals_fx
+https://www.fxstreet.com/rss/news|metals_fx
+
+# --- Рынок США (глубоко) ---
+https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258|usmarket
+https://finance.yahoo.com/news/rssindex|usmarket
+https://seekingalpha.com/market_currents.xml|usmarket
+
+# --- Инвест-идеи с форумов ---
+https://www.reddit.com/r/wallstreetbets/.rss|wsb
+
+# --- IPO / AI / робототехника / биотех ---
+https://www.therobotreport.com/feed/|ipo_ai_bio
+https://www.fiercebiotech.com/rss.xml|ipo_ai_bio
+https://www.nasdaq.com/feed/rssoutbound?category=markets::ipo-nasdaq|ipo_ai_bio
+https://news.crunchbase.com/feed/|ipo_ai_bio
+
+# --- Технологии и AI (глубоко: модели, промпт-инжиниринг) ---
+https://techcrunch.com/feed/|tech_ai
+https://www.theverge.com/rss/index.xml|tech_ai
+https://feeds.arstechnica.com/arstechnica/index|tech_ai
+https://hnrss.org/newest?points=300|tech_ai
+https://blog.google/technology/ai/rss/|tech_ai
+https://www.reddit.com/r/LocalLLaMA/.rss|tech_ai
+
+# --- Геополитика (кратко) ---
+https://www.france24.com/en/rss|geopolitics
+https://www.aljazeera.com/xml/rss/all.xml|geopolitics
+
+# --- Крипта (очень кратко) ---
+https://cointelegraph.com/rss|crypto
+https://decrypt.co/feed|crypto
