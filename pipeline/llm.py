@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 import httpx
 
@@ -38,7 +39,7 @@ CHAT_SYSTEM_PROMPT = """Ты — ассистент владельца личн�
 3. По-русски, кратко и по делу, без приветствий и извинений."""
 
 
-def _call(system: str, messages: list[dict], max_tokens: int) -> str:
+def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: float = 300.0) -> str:
     """Стриминговый вызов: длинные генерации не упираются в read-timeout."""
     parts: list[str] = []
     with httpx.stream(
@@ -55,7 +56,7 @@ def _call(system: str, messages: list[dict], max_tokens: int) -> str:
             "messages": messages,
             "stream": True,
         },
-        timeout=httpx.Timeout(900.0, connect=30.0),
+        timeout=httpx.Timeout(read_timeout, connect=30.0),
     ) as response:
         if response.status_code != 200:
             response.read()
@@ -79,24 +80,36 @@ def summarize(items_text: str) -> str:
     if not config.LLM_API_KEY:
         log.warning("LLM_API_KEY не задан — mock-сводка")
         return mock_summary(items_text, reason="LLM_API_KEY не задан")
-    try:
-        return _call(SYSTEM_PROMPT, [{"role": "user", "content": items_text}], 16000)
-    except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:300]
-        log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)
-        return mock_summary(items_text, reason=f"LLM API error {exc.response.status_code}: {body}")
+    messages = [{"role": "user", "content": items_text}]
+    last_exc: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            # 900с: модель может долго думать над большим объёмом новостей
+            return _call(SYSTEM_PROMPT, messages, 16000, read_timeout=900.0)
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:300]
+            log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)
+            return mock_summary(items_text, reason=f"LLM API error {exc.response.status_code}: {body}")
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_exc = exc
+            log.error("LLM таймаут/транспорт (попытка %d/2): %s", attempt, exc)
+            if attempt == 1:
+                time.sleep(30)
+    return mock_summary(items_text, reason=f"LLM недоступна после 2 попыток: {last_exc}")
 
 
 def chat(messages: list[dict], news_context: str) -> str:
     system = CHAT_SYSTEM_PROMPT + "\n\nКонтекст последних статей ленты:\n" + news_context
-    return _call(system, messages, 3000)
+    return _call(system, messages, 3000, read_timeout=180.0)
 
 
 def mock_summary(items_text: str, reason: str = "LLM_API_KEY не задан") -> str:
     lines = [f"📰 MOCK-сводка ({reason})", ""]
-    for line in items_text.splitlines():
-        if line.strip():
-            lines.append(f"• {line.strip()}")
+    items = [ln.strip() for ln in items_text.splitlines() if ln.strip()]
+    for line in items[:30]:
+        lines.append(f"• {line}")
+    if len(items) > 30:
+        lines.append(f"… и ещё {len(items) - 30} новостей — повторите /digest позже")
     lines.append("")
     lines.append("💡 Итог: mock-сводка, причина выше. Проверьте баланс/доступность LLM API.")
     return "\n".join(lines)

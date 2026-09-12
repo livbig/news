@@ -15,6 +15,8 @@
 
 - Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`.
   Один потребитель getUpdates: перед ручным запуском бота останови агент (иначе 409).
+- Сводки двухфазно: подготовка (сбор + LLM, таймаут 15 мин + ретрай) в 08:50/20:50,
+  отправка ровно в 09:00/21:00 МСК; догоняюще после сна Mac.
 - Остановить агента (для отладки): `launchctl bootout gui/501/com.fifth.newsbot`
 - Ручной прогон с живым выводом: `python3 -m pipeline bot`
 - Запустить агент снова: `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`

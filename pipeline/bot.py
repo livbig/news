@@ -54,6 +54,11 @@ def handle_chat(conn, text: str) -> None:
         log.error("Ошибка LLM в диалоге: %s", exc)
         telegram.send(f"LLM недоступен: {exc}")
         return
+    log.info("chat: ответ %d симв.", len(answer))
+    if not answer.strip():
+        log.warning("chat: пустой ответ LLM")
+        telegram.send("LLM вернул пустой ответ — попробуйте переспросить.")
+        return
     conn.execute("INSERT INTO chat_history (role, text) VALUES ('assistant', ?)", (answer,))
     conn.commit()
     telegram.send(answer)
@@ -122,6 +127,15 @@ def _next_fire(times: set[str], after: datetime) -> datetime:
     return (after + timedelta(days=1)).replace(hour=h, minute=m, second=0, microsecond=0)
 
 
+PREP_LEAD_MINUTES = 10
+
+
+def _minus_minutes(t: str, minutes: int) -> str:
+    h, m = map(int, t.split(":"))
+    total = (h * 60 + m - minutes) % (24 * 60)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
 def run_bot():
     if not config.TELEGRAM_TOKEN:
         log.error("TELEGRAM_TOKEN не задан — бот не стартует")
@@ -129,8 +143,14 @@ def run_bot():
     conn = db.connect()
     offset = 0
     schedule = {s.strip() for s in config.DIGEST_TIMES.split(",") if s.strip()}
-    next_fire = _next_fire(schedule, datetime.now()) if schedule else None
-    log.info("Бот запущен. Следующая сводка: %s", next_fire or "нет расписания")
+    prep = {_minus_minutes(t, PREP_LEAD_MINUTES) for t in schedule}
+    next_prep = _next_fire(prep, datetime.now()) if prep else None
+    log.info(
+        "Бот запущен. Подготовка сводок: %s, отправка: %s",
+        ",".join(sorted(prep)) or "нет", ",".join(sorted(schedule)) or "нет",
+    )
+    pending: str | None = None  # подготовленная сводка ("" — новых статей нет)
+    send_at: datetime | None = None
     while True:
         try:
             for upd in get_updates(offset):
@@ -141,14 +161,43 @@ def run_bot():
         except Exception as exc:
             log.error("getUpdates: %s (VPN?) — повтор через 10с", exc)
             time.sleep(10)
-        # догоняющая сводка: сработает и после сна Mac, если слот проспан
-        if next_fire and datetime.now() >= next_fire:
+        now = datetime.now()
+        # фаза 1 (за 10 мин до слота): собрать новости и сгенерировать сводку;
+        # догоняющая — сработает и после сна Mac, если слот проспан
+        if next_prep and now >= next_prep:
+            send_at = next_prep + timedelta(minutes=PREP_LEAD_MINUTES)
             try:
                 new = collect(conn)
-                result = digest.build_digest(conn)
-                if result:
-                    digest.deliver(result)
-                    log.info("Сводка по расписанию (+%d статей)", new)
+                pending = digest.build_digest(conn) or ""
+                log.info("Сводка подготовлена (+%d статей), отправка в %s", new, send_at)
+            except Exception as exc:
+                log.error("Подготовка сводки упала: %s — повтор в %s", exc, send_at)
+                pending = None
+            next_prep = _next_fire(prep, now)
+        # фаза 2 (слот отправки): доставить подготовленное; если подготовка
+        # падала — собрать с нуля; если доставка не прошла (сеть/Telegram) —
+        # повторить через 10 минут, не теряя сводку
+        if send_at and now >= send_at:
+            sent = True
+            try:
+                if pending is None:
+                    new = collect(conn)
+                    result = digest.build_digest(conn)
+                    if result:
+                        sent = digest.deliver(result)
+                        if sent:
+                            log.info("Сводка по расписанию после сбоя (+%d статей)", new)
+                elif pending:
+                    sent = digest.deliver(pending)
+                    if sent:
+                        log.info("Сводка отправлена по расписанию")
+                else:
+                    log.info("Новых статей для сводки нет")
             except Exception as exc:
                 log.error("Сводка по расписанию упала: %s", exc)
-            next_fire = _next_fire(schedule, datetime.now())
+                sent = False
+            if sent:
+                pending, send_at = None, None
+            else:
+                send_at = now + timedelta(minutes=10)
+                log.error("Доставка не удалась — повтор в %s", send_at.strftime("%H:%M"))
