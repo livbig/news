@@ -54,8 +54,8 @@ async def expire_session(bot, storage, chat_id: int, user_id: int) -> None:
     ACTIVE.pop((chat_id, user_id), None)
     await bot.send_message(
         chat_id,
-        "Опрос завершён из-за неактивности (10 минут). "
-        "Отправьте /start, чтобы пройти его заново.",
+        "Диалог завершён из-за неактивности (10 минут). "
+        "Отправьте /start, чтобы пройти опрос заново.",
     )
 
 
@@ -256,7 +256,7 @@ async def cq_time(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.message(StateFilter(Survey.time), F.text)
+@router.message(StateFilter(Survey.time), F.text & ~F.text.startswith("/"))
 async def ms_time_input(message: Message, state: FSMContext):
     value = message.text.strip()
     match = TIME_RE.match(value)
@@ -319,8 +319,10 @@ async def cq_restart(cb: CallbackQuery, state: FSMContext):
 
 # --- посторонний ввод внутри опроса --------------------------------------------
 
+# команды не перехватываем (план §1.3: любая команда сбрасывает состояние) —
+# они уходят в свои обработчики ниже по роутерам
 @router.message(StateFilter(Survey.rs_mode, Survey.topics, Survey.sources,
-                            Survey.freq, Survey.confirm))
+                            Survey.freq, Survey.confirm), ~F.text.startswith("/"))
 async def ms_foreign(message: Message, state: FSMContext):
     _touch(message.chat.id, message.from_user.id)
     await message.answer(

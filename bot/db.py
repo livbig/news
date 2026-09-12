@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS chat_history (
 def connect(path=None):
     # check_same_thread=False: хендлеры зовут БД через asyncio.to_thread (последовательно)
     conn = sqlite3.connect(path or config.DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     return conn
@@ -139,8 +140,69 @@ def finalize_survey(conn, chat_id, entries, times, mode) -> None:
     conn.commit()
 
 
-def list_sources(conn, chat_id) -> list[tuple]:
+def list_sources(conn, chat_id) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT title, kind, url, origin, enabled FROM sources WHERE chat_id=? ORDER BY id",
+        "SELECT id, title, kind, url, origin, enabled, status, status_msg"
+        " FROM sources WHERE chat_id=? ORDER BY id",
         (chat_id,),
     ).fetchall()
+
+
+def add_source(conn, chat_id, kind, url, title, origin="manual", topics=None):
+    """Добавить источник (FR-04/FR-05). None — уже есть (UNIQUE chat_id,kind,url)."""
+    conn.execute("INSERT OR IGNORE INTO users (chat_id, created_at) VALUES (?, ?)",
+                 (chat_id, now_iso()))
+    try:
+        cur = conn.execute(
+            "INSERT INTO sources (chat_id, kind, url, title, topics, origin, added_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (chat_id, kind, url, title, json.dumps(topics or []), origin, now_iso()),
+        )
+    except sqlite3.IntegrityError:
+        return None
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_source(conn, source_id) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, chat_id, kind, url, title, origin, enabled, status, status_msg"
+        " FROM sources WHERE id=?",
+        (source_id,),
+    ).fetchone()
+
+
+def set_enabled(conn, source_id, enabled: bool) -> None:
+    conn.execute("UPDATE sources SET enabled=? WHERE id=?", (1 if enabled else 0, source_id))
+    conn.commit()
+
+
+def delete_source(conn, source_id) -> None:
+    """items удаляются каскадом (ON DELETE CASCADE, TC-23)."""
+    conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+    conn.commit()
+
+
+def enabled_rss_sources(conn, chat_id) -> list[tuple]:
+    return conn.execute(
+        "SELECT id, url FROM sources WHERE chat_id=? AND enabled=1 AND kind='rss' ORDER BY id",
+        (chat_id,),
+    ).fetchall()
+
+
+def set_source_status(conn, source_id, status: str, msg) -> None:
+    conn.execute(
+        "UPDATE sources SET status=?, status_msg=? WHERE id=?", (status, msg, source_id)
+    )
+    conn.commit()
+
+
+def user_settings(conn, chat_id):
+    """(row(send_times), источников) или (None, 0), если чат не знаком."""
+    row = conn.execute("SELECT send_times FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+    if row is None:
+        return None, 0
+    count = conn.execute(
+        "SELECT COUNT(*) FROM sources WHERE chat_id=?", (chat_id,)
+    ).fetchone()[0]
+    return row, count

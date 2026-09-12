@@ -10,3 +10,11 @@ class Survey(StatesGroup):
     freq = State()
     time = State()
     confirm = State()
+
+
+class AddSource(StatesGroup):
+    """Мастер добавления источника (план §1.3): тип → адрес → превью."""
+
+    kind = State()
+    url = State()
+    preview = State()

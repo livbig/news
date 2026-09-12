@@ -20,7 +20,7 @@ def run_mock(conn) -> int:
         log.error("FAIL %s: %s", config.FEED_URL, exc)
         print(f"Источник недоступен: {exc}")
         return 1
-    text = digest.build_mock(conn, source_id)
+    text = digest.build_mock(conn, 0)  # mock-прогон живёт под служебным chat_id=0
     if text is None:
         print("Новых статей нет.")
     else:

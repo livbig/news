@@ -84,18 +84,66 @@ def rs_mode_kb() -> InlineKeyboardMarkup:
 
 
 def menu_kb(onboarded: bool) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text="Источники", callback_data="menu:list")]]
+    rows = [[
+        InlineKeyboardButton(text="Источники", callback_data="menu:list"),
+        InlineKeyboardButton(text="Сводка сейчас", callback_data="menu:digest"),
+    ]]
     if onboarded:
-        rows[0].append(
-            InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")
+        rows.append(
+            [InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def sources_list_kb() -> InlineKeyboardMarkup:
+# И3: активен RSS; остальные типы включаются в И6 (TC-12/план §1.3)
+KIND_LABELS = [
+    ("rss", "RSS-фид"),
+    ("html", "Сайт"),
+    ("tgweb", "TG-канал"),
+    ("reddit", "Subreddit"),
+    ("twitter", "X-аккаунт"),
+]
+
+
+def kind_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"a:k:{kind}")]
+        for kind, label in KIND_LABELS
+    ]
+    rows.append([InlineKeyboardButton(text="Отмена", callback_data="a:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def sources_manage_kb(rows) -> InlineKeyboardMarkup:
+    """CRUD-список: строки list_sources (id, title, kind, url, origin, enabled,
+    status, status_msg) → вкл/выкл + удаление каждого + навигация (FR-04)."""
+    kb = []
+    for sid, title, kind, url, origin, enabled, status, status_msg in rows:
+        kb.append([
+            InlineKeyboardButton(
+                text=("⏸ " if enabled else "▶ ") + title[:24], callback_data=f"src:t:{sid}"
+            ),
+            InlineKeyboardButton(text="✕", callback_data=f"src:d:{sid}"),
+        ])
+    kb.append([InlineKeyboardButton(text="➕ Добавить источник", callback_data="add:start")])
+    kb.append([InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")])
+    kb.append([InlineKeyboardButton(text="В меню", callback_data="menu:main")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+
+def preview_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")],
-            [InlineKeyboardButton(text="В меню", callback_data="menu:main")],
+            [InlineKeyboardButton(text="Подтвердить", callback_data="a:confirm")],
+            [InlineKeyboardButton(text="Отмена", callback_data="a:cancel")],
+        ]
+    )
+
+
+def delete_confirm_kb(sid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Да, удалить", callback_data=f"src:dy:{sid}")],
+            [InlineKeyboardButton(text="Отмена", callback_data="menu:list")],
         ]
     )
