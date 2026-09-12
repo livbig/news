@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS chat_history (
 
 
 def connect(path=None):
-    conn = sqlite3.connect(path or config.DB_PATH)
+    # check_same_thread=False: хендлеры зовут БД через asyncio.to_thread (последовательно)
+    conn = sqlite3.connect(path or config.DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     return conn
@@ -103,3 +105,42 @@ def ensure_bootstrap(conn, feed_url) -> int:
         "SELECT id FROM sources WHERE chat_id=0 AND kind='rss' AND url=?", (feed_url,)
     ).fetchone()
     return row[0]
+
+
+def ensure_user(conn, chat_id) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO users (chat_id, created_at) VALUES (?, ?)", (chat_id, now_iso())
+    )
+    conn.commit()
+
+
+def is_onboarded(conn, chat_id) -> bool:
+    row = conn.execute("SELECT onboarded_at FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+    return bool(row and row[0])
+
+
+def finalize_survey(conn, chat_id, entries, times, mode) -> None:
+    """Финализация опроса (D22). replace — удалить прошлые survey-источники;
+    add — объединение без дублей по UNIQUE(chat_id, kind, url).
+    last_sent_at не трогаем (окно не сбрасывается, сценарии 6.2/6.3)."""
+    now = now_iso()
+    conn.execute("INSERT OR IGNORE INTO users (chat_id, created_at) VALUES (?, ?)", (chat_id, now))
+    if mode == "replace":
+        conn.execute("DELETE FROM sources WHERE chat_id=? AND origin='survey'", (chat_id,))
+    conn.executemany(
+        "INSERT OR IGNORE INTO sources (chat_id, kind, url, title, topics, origin, added_at)"
+        " VALUES (?, 'rss', ?, ?, ?, 'survey', ?)",
+        [(chat_id, e["url"], e["title"], json.dumps(e.get("topics", [])), now) for e in entries],
+    )
+    conn.execute(
+        "UPDATE users SET send_times=?, onboarded_at=COALESCE(onboarded_at, ?) WHERE chat_id=?",
+        (json.dumps(times), now, chat_id),
+    )
+    conn.commit()
+
+
+def list_sources(conn, chat_id) -> list[tuple]:
+    return conn.execute(
+        "SELECT title, kind, url, origin, enabled FROM sources WHERE chat_id=? ORDER BY id",
+        (chat_id,),
+    ).fetchall()

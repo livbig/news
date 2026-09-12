@@ -325,5 +325,37 @@ CLI Access token (app<id>:<secret>) → `npx tgcloud login`; деплой с VPN
 - Установлен aiogram 3.31.0 (user-site, Python 3.14.7 — риск R7 не сработал).
 - Новый пакет bot/: config (пиннинг через import pipeline, D23; dev-токен приоритетнее прод, D24), db (схема bot.db по плану П.2: users/sources/items/digests/digest_items/chat_history; url_hash из pipeline.db — R5), collect (parse_feed из pipeline.fetch — R3, ISO-даты), digest (mock_summary из pipeline.llm — R10), tgsend (chunk_text+sanitize из pipeline.telegram — R7/R8, chat_id-параметр, без токена stdout), handlers (/start, /digest на aiogram, to_thread для sync-кода), __main__ (mock-режим без токенов).
 - Тесты tests/test_iter1.py: TC-03/04/05/42 PASS (TC-42: 2 цикла фикса — ThreadingHTTPServer + время жизни сервера на оба прогона). Живой смоук: fxstreet фид → +30 → mock-сводка в stdout. Прод-агент com.fifth.newsbot не тронут (state=running), pipeline/ без изменений.
-- Ограничение: реальный ответ dev-бота не проверен — TELEGRAM_TOKEN_DEV отсутствует (нужен второй бот от @BotFather); проверены импорт хендлеров, конструирование Bot и mock-прогон.
-- Дальше: итерация 2 — онбординг FSM, каталог из feeds.txt, повторный опрос A/B, FSM-таймаут sweeper.
+- Ограничение И1: реальный ответ dev-бота не проверен — TELEGRAM_TOKEN_DEV отсутствовал; снято в И2 (токен получен).
+
+## 2026-09-13 — Итерация 2 (онбординг FSM, каталог, повторный опрос A/B)
+
+- **Dev-токен получен от пользователя**: второй бот от BotFather, сохранён в `.env`
+  как `TELEGRAM_TOKEN_DEV` (в git не попадает: `.env` в `.gitignore`; в docs не
+  кладём сознательно — история git). Пользователь удалит бота после миграции прода (И7).
+- Новое в `bot/`: `catalog.py` + `catalog_data.json` (23 фида из feeds.txt, метки тем,
+  приоритет = порядок пользователя FR-02, `pick()` c лимитом 8 и дефолтом по «глубоким»
+  темам); `states.py` (Survey: rs_mode→topics→sources→freq→time→confirm);
+  `keyboards.py` (inline, отметка выбора «✓» в тексте кнопки); `scheduler.py`
+  (FSM-sweeper, порог BOT_FSM_TIMEOUT=600с / интервал BOT_FSM_SWEEP=60с, env —
+  для тестов); `handlers/` стал пакетом: `onboarding.py` (опрос, режимы A/B,
+  ACTIVE-карта неактивности, expire_session), `menu.py` (/sources список, /digest,
+  меню-колбэки, fallback устаревших кнопок), `__init__.py` (MemoryStorage +
+  sweeper-задача).
+- `db.py`: check_same_thread=False (хендлеры зовут БД из to_thread — до этого
+  /digest по TG-пути упал бы с ProgrammingError), ensure_user/is_onboarded/
+  finalize_survey (replace: DELETE survey + вставка; add: INSERT OR IGNORE по
+  UNIQUE(chat_id,kind,url); last_sent_at не трогается) / list_sources.
+- Команды внутри опроса сбрасывают состояние; посторонний текст в опросе — подсказка
+  без смены шага; ввод времени — текстом ЧЧ:ММ с нормализацией и валидацией.
+- Тесты tests/test_iter2.py: TC-01/TC-02 (подбор каталога), TC-33 (финализация A/B
+  на БД, оба режима + повторное объединение без дублей), TC-10 (sweep_once:
+  FakeBot+MemoryStorage, просроченная сессия сброшена с сообщением «/start»,
+  свежая не тронута). 5/5 PASS; tests/test_iter1.py 4/4 PASS (TC-42 mock-e2e
+  прогнан повторно после рефакторинга handlers — критерий 4 AGENTS жив).
+- Живой прогон: dev-бот запущен вручную (`python3 -m bot`), поллит
+  @Testernewsbotbot id=8890901874, «FSM-sweeper: таймаут 600c» в логе; прод-агент
+  com.fifth.newsbot не тронут (409 исключён по D24). Ручная приёмка TC-38/39/40
+  (сценарии 6.1–6.3) — за пользователем в чате с dev-ботом.
+- Ограничение: автоматизированных e2e-прогонов диалога нет (по плану И2 — приёмка
+  ручная); `_allowed` пускает только TELEGRAM_CHAT_ID.
+
