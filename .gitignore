@@ -4,3 +4,4 @@ logs/
 digests/
 __pycache__/
 .venv/
+bot.db
