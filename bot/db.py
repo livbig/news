@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from pipeline.db import url_hash  # R5: боевая формула дедупа (D19)
 
@@ -79,6 +79,12 @@ def connect(path=None):
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def minus_iso(now: str, hours: int) -> str:
+    """ISO-метка на `hours` часов раньше данной (для периода сводки, D9)."""
+    moment = datetime.fromisoformat(now.replace("Z", "+00:00")) - timedelta(hours=hours)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def insert_item(conn, source_id, url, title, published) -> bool:
@@ -206,3 +212,62 @@ def user_settings(conn, chat_id):
         "SELECT COUNT(*) FROM sources WHERE chat_id=?", (chat_id,)
     ).fetchone()[0]
     return row, count
+
+
+# --- И4: окно дельты (D26) и расписание (FR-10..FR-12) ------------------------
+
+def pending_items(conn, chat_id, limit=50) -> list[sqlite3.Row]:
+    """Непотреблённые элементы чата: не входившие ни в одну сводку чата
+    (digest_items). published не фильтрует окно (даты фидов ненадёжны,
+    D26) — только сортировка, свежие первыми."""
+    return conn.execute(
+        "SELECT i.id, i.title, i.url FROM items i"
+        " JOIN sources s ON s.id = i.source_id"
+        " WHERE s.chat_id=? AND NOT EXISTS ("
+        "   SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
+        "   WHERE di.item_id=i.id AND d.chat_id=?)"
+        " ORDER BY i.published DESC, i.id DESC LIMIT ?",
+        (chat_id, chat_id, limit),
+    ).fetchall()
+
+
+def record_digest(conn, chat_id, message_text, item_ids, now=None) -> int | None:
+    """Транзакционная фиксация отправки (план §1.2): digests + digest_items +
+    users.last_sent_at одной транзакцией — защита от дублей при catch-up."""
+    now = now or now_iso()
+    row = conn.execute("SELECT last_sent_at FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+    if row is None:
+        return None
+    period_from = row[0] or minus_iso(now, 24)  # первая сводка — окно 24 ч (D9)
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO digests (chat_id, period_from, period_to, item_count,"
+                " message_text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, period_from, now, len(item_ids), message_text, now),
+            )
+            digest_id = cur.lastrowid
+            conn.executemany(
+                "INSERT INTO digest_items (digest_id, item_id) VALUES (?, ?)",
+                [(digest_id, item_id) for item_id in item_ids],
+            )
+            conn.execute("UPDATE users SET last_sent_at=? WHERE chat_id=?", (now, chat_id))
+    except sqlite3.IntegrityError:
+        return None
+    return digest_id
+
+
+def set_send_times(conn, chat_id, times) -> None:
+    conn.execute(
+        "UPDATE users SET send_times=? WHERE chat_id=?", (json.dumps(sorted(times)), chat_id)
+    )
+    conn.commit()
+
+
+def scheduled_users(conn) -> list[sqlite3.Row]:
+    """Onboarded-чаты для планировщика: расписание, прошлой отправки и
+    онбординга (точка отсчёта первой сводки, D9)."""
+    return conn.execute(
+        "SELECT chat_id, send_times, last_sent_at, onboarded_at"
+        " FROM users WHERE onboarded_at IS NOT NULL"
+    ).fetchall()

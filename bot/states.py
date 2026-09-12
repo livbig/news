@@ -18,3 +18,9 @@ class AddSource(StatesGroup):
     kind = State()
     url = State()
     preview = State()
+
+
+class Settings(StatesGroup):
+    """Настройки расписания (план §1.3): мультивыбор времён, частота = их число."""
+
+    time = State()

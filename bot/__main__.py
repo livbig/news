@@ -20,9 +20,9 @@ def run_mock(conn) -> int:
         log.error("FAIL %s: %s", config.FEED_URL, exc)
         print(f"Источник недоступен: {exc}")
         return 1
-    text = digest.build_mock(conn, 0)  # mock-прогон живёт под служебным chat_id=0
+    text, _ids = digest.build_delta(conn, 0)  # mock-прогон живёт под служебным chat_id=0
     if text is None:
-        print("Новых статей нет.")
+        print(digest.EMPTY_TEXT)
     else:
         tgsend.send_chat(text, 0)  # chat_id=0 → mock-режим: stdout
         print(f"\n[+{new} новых, mock-режим]")

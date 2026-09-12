@@ -5,7 +5,6 @@ import io
 import sys
 import threading
 import unittest
-import uuid
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # fakes.py
 
 VALID_XML = ("""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>Valid Feed</title>
@@ -66,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def setUpModule():
-    global SERVER, BASE, _SAVED_CONFIG, DISPATCHER
+    global SERVER, BASE, _SAVED_CONFIG
     SERVER = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=SERVER.serve_forever, daemon=True).start()
     BASE = f"http://127.0.0.1:{SERVER.server_address[1]}"
@@ -75,14 +75,6 @@ def setUpModule():
     _SAVED_CONFIG = (config.TOKEN, config.ALLOWED_CHAT_ID)
     config.TOKEN = ""
     config.ALLOWED_CHAT_ID = ""
-    # один диспетчер на модуль: aiogram-роутеры нельзя подключать повторно
-    from aiogram import Dispatcher
-    from aiogram.fsm.storage.memory import MemoryStorage
-    from bot.handlers import menu, onboarding, sources
-    DISPATCHER = Dispatcher(storage=MemoryStorage())
-    DISPATCHER.include_router(onboarding.router)
-    DISPATCHER.include_router(sources.router)
-    DISPATCHER.include_router(menu.router)
 
 
 def tearDownModule():
@@ -165,47 +157,8 @@ class TC11ValidRSS(unittest.TestCase):
 
 # --- инфраструктура интеграционных кейсов: fake-обновления + FakeBot -----------
 
-from aiogram import Bot  # noqa: E402
-from aiogram.types import CallbackQuery, Chat, Message, Update, User  # noqa: E402
-
-
-class FakeBot(Bot):
-    """Перехват Telegram-методов на уровне bot.__call__ — сеть не трогаем."""
-
-    def __init__(self):
-        super().__init__(token="1:TEST")
-        self.calls = []
-
-    async def __call__(self, method, request_timeout=None):
-        values = method.model_dump(exclude_none=True)
-        self.calls.append((type(method).__name__, values))
-        return True
-
-    def sent_texts(self):
-        return [v["text"] for _, v in self.calls if _ == "SendMessage"]
-
-    def edited_texts(self):
-        return [v["text"] for _, v in self.calls if _ == "EditMessageText"]
-
-
-def make_message(chat_id, user_id, text, message_id=10):
-    return Message(
-        message_id=message_id,
-        date=datetime.now(timezone.utc),
-        chat=Chat(id=chat_id, type="private"),
-        from_user=User(id=user_id, is_bot=False, first_name="T"),
-        text=text,
-    )
-
-
-def make_callback(chat_id, user_id, data, message_id=10):
-    return CallbackQuery(
-        id=uuid.uuid4().hex[:8],
-        from_user=User(id=user_id, is_bot=False, first_name="T"),
-        chat_instance="ci",
-        data=data,
-        message=make_message(chat_id, user_id, "", message_id),
-    )
+from aiogram.types import Update  # noqa: E402
+from fakes import FakeBot, make_callback, make_message, shared_dispatcher  # noqa: E402
 
 
 class ChatCase(unittest.TestCase):
@@ -221,7 +174,7 @@ class ChatCase(unittest.TestCase):
 
         handlers.init(db.connect(":memory:"))
         self.db = db
-        self.dp = DISPATCHER
+        self.dp = shared_dispatcher()
         self.bot = FakeBot()
         self._update_id = 0
         Handler.HITS.clear()
