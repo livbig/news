@@ -3,11 +3,12 @@ import asyncio
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
-from .. import collect, digest, keyboards, llm, tgsend
+from .. import collect, digest, keyboards, llm, tgsend, webapp
 from . import onboarding
 from .onboarding import _drop, allowed
 
@@ -50,6 +51,30 @@ async def cq_menu_main(cb: CallbackQuery, state: FSMContext):
     if not allowed(cb.message.chat.id):
         return await cb.answer()
     await cb.message.edit_text("Главное меню.", reply_markup=keyboards.menu_kb(onboarded=True))
+    await cb.answer()
+
+
+# --- И8: Mini App (FR-17) — кнопка с fallback в бот-интерфейс ---------------------
+
+@router.callback_query(F.data == "menu:webapp")
+async def cq_webapp(cb: CallbackQuery, state: FSMContext):
+    if not allowed(cb.message.chat.id):
+        return await cb.answer()
+    await _drop(state)
+    if not webapp.running() or not webapp.URL:
+        await cb.answer("Веб-панель недоступна — управление в боте", show_alert=True)
+        await cb.message.edit_text("Главное меню.", reply_markup=keyboards.menu_kb(onboarded=True))
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Открыть веб-панель", web_app=WebAppInfo(url=webapp.URL))
+    ]])
+    try:
+        await cb.message.answer("Веб-панель: источники и расписание.", reply_markup=kb)
+    except TelegramBadRequest:
+        # Bot API требует https для web_app-кнопок; локальный путь — текстом
+        await cb.message.answer(
+            f"Веб-панель: {webapp.URL} — откройте в браузере на этом Mac "
+            "(авторизация — из Telegram Desktop).")
     await cb.answer()
 
 

@@ -23,3 +23,6 @@ TGWEB_URL_TEMPLATE = os.environ.get("BOT_TGWEB_URL_TEMPLATE", "https://t.me/s/{n
 REDDIT_RSS_TEMPLATE = os.environ.get(
     "BOT_REDDIT_RSS_TEMPLATE", "https://www.reddit.com/r/{name}/new/.rss"
 )
+
+# И8: Mini App (FR-17) — локальный веб-сервер на 127.0.0.1
+WEBAPP_PORT = int(os.environ.get("BOT_WEBAPP_PORT", "8087"))
