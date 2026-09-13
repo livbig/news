@@ -223,8 +223,7 @@ class TC12MasterInvalidURL(ChatCase):
         self.assertIn("Источников пока нет", self.bot.sent_texts()[-1])
         self.press("add:start")  # шаг типа
         self.assertIn("Какой тип источника", self.bot.edited_texts()[-1])
-        self.press("a:k:html")  # недоступный тип — вежливый alert, FSM на месте
-        self.press("a:k:rss")  # → ввод адреса
+        self.press("a:k:rss")  # → ввод адреса (ветка «тип в разработке» снята в И6)
         self.assertIn("ссылку на RSS/Atom-фид", self.bot.edited_texts()[-1])
         for bad in ("htp:/bad-url", "not-a-url"):  # формат URL
             self.send(bad)

@@ -95,7 +95,7 @@ def menu_kb(onboarded: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# И3: активен RSS; остальные типы включаются в И6 (TC-12/план §1.3)
+# типы мастера (план §1.3); все активны с И6
 KIND_LABELS = [
     ("rss", "RSS-фид"),
     ("html", "Сайт"),

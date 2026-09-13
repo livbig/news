@@ -1,14 +1,13 @@
-"""CRUD источников (FR-04) и мастер добавления своих RSS (FR-05, план §1.3)."""
+"""CRUD источников (FR-04) и мастер добавления всех типов (FR-05..FR-09)."""
 import asyncio
 import logging
-from urllib.parse import urlsplit
 
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from .. import collect, db, keyboards
+from .. import collect, config, db, keyboards
 from ..states import AddSource
 from . import onboarding
 from .onboarding import _drop, _touch, allowed
@@ -17,7 +16,14 @@ log = logging.getLogger("bot.sources")
 
 router = Router()
 
-PREVIEW_TITLES = 3
+# подсказки шага AsUrl по типу (план §1.3)
+KIND_PROMPTS = {
+    "rss": "Отправьте ссылку на RSS/Atom-фид, например https://site.com/rss",
+    "html": "Отправьте ссылку на страницу со списком новостей, например https://site.com/news",
+    "tgweb": "Отправьте имя публичного канала (например, durov) или ссылку t.me/durov",
+    "reddit": "Отправьте имя сабреддита, например wallstreetbets или r/wallstreetbets",
+    "twitter": "Отправьте имя аккаунта X, например @durov",
+}
 
 
 def _list_text(rows) -> str:
@@ -25,22 +31,13 @@ def _list_text(rows) -> str:
     for _id, title, kind, url, origin, enabled, status, status_msg in rows:
         mark = "" if enabled else " (выключен)"
         tag = "опрос" if origin == "survey" else "свой"
-        warn = f"\n  ⚠ {status_msg}" if status == "error" and status_msg else ""
+        warn = ""
+        if status in ("error", "degraded") and status_msg:
+            warn = f"\n  ⚠ {status_msg}"
         lines.append(f"• {title} — {kind}, {tag}{mark}{warn}")
     if not rows:
         return "Источников пока нет — добавьте свой или пройдите опрос: /start"
     return f"Источники ({len(rows)}):\n\n" + "\n".join(lines)
-
-
-def _validate_url(value: str) -> str | None:
-    """TC-12: 'htp:/bad-url', 'not-a-url' — None; валидный http(s) — сам URL."""
-    value = value.strip()
-    parts = urlsplit(value)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        return None
-    if "." not in parts.netloc and parts.netloc != "localhost":
-        return None
-    return value
 
 
 async def _owned_source(cb: CallbackQuery, source_id: int):
@@ -134,42 +131,36 @@ async def cq_add_start(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(AddSource.kind), F.data.startswith("a:k:"))
 async def cq_kind(cb: CallbackQuery, state: FSMContext):
     kind = cb.data.split(":", 2)[2]
-    if kind != "rss":
+    if kind == "twitter" and not config.TWITTER_BRIDGE_URL_TEMPLATE:
         return await cb.answer(
-            "Пока поддерживается только RSS — остальные типы в разработке", show_alert=True
+            "RSS-мост X не настроен (TWITTER_BRIDGE_URL_TEMPLATE) — добавление недоступно",
+            show_alert=True,
         )
     _touch(cb.message.chat.id, cb.from_user.id)
-    await state.update_data(kind="rss")
+    await state.update_data(kind=kind)
     await state.set_state(AddSource.url)
-    await cb.message.edit_text(
-        "Отправьте ссылку на RSS/Atom-фид, например https://site.com/rss\n"
-        "Отмена — /sources."
-    )
+    await cb.message.edit_text(KIND_PROMPTS[kind] + "\nОтмена — /sources.")
     await cb.answer()
 
 
 @router.message(StateFilter(AddSource.url), F.text & ~F.text.startswith("/"))
 async def ms_url(message: Message, state: FSMContext):
     _touch(message.chat.id, message.from_user.id)
-    url = _validate_url(message.text)
-    if not url:
-        await message.answer(
-            "Это не похоже на ссылку. Отправьте адрес вида https://site.com/rss"
-        )
-        return
+    data = await state.get_data()
+    kind = data.get("kind") or "rss"
     try:
-        feed_title, entries = await asyncio.to_thread(collect.fetch_feed, url)
+        title, url, lines = await asyncio.to_thread(collect.make_preview, kind, message.text)
     except Exception as exc:
-        log.error("Превью не удалось %s: %s", url, exc)
-        await message.answer(
-            f"Не удалось прочитать фид: {exc}\n\nПроверьте адрес и отправьте снова."
-        )
+        log.error("Превью не удалось [%s] %s: %r", kind, message.text, exc)
+        await message.answer(f"{exc}\n\nПроверьте адрес и отправьте снова.")
         return
-    titles = [e.get("title", "") for e in entries[:PREVIEW_TITLES] if e.get("title")]
-    await state.update_data(url=url, feed_title=feed_title)
+    word = "посты" if kind == "tgweb" else "заголовки"
+    # D28: сабреддит — это rss-источник (.rss-эндпоинт), отдельного типа в БД нет
+    store_kind = "rss" if kind == "reddit" else kind
+    await state.update_data(kind=store_kind, url=url, title=title)
     await state.set_state(AddSource.preview)
     await message.answer(
-        f"«{feed_title}»\nПоследние заголовки:\n" + "\n".join("• " + t for t in titles)
+        f"«{title}»\nПоследние {word}:\n" + "\n".join("• " + t for t in lines if t)
         + "\n\nДобавить этот источник?",
         reply_markup=keyboards.preview_kb(),
     )
@@ -180,15 +171,16 @@ async def cq_confirm(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     chat_id = cb.message.chat.id
     source_id = await asyncio.to_thread(
-        db.add_source, onboarding.conn, chat_id, "rss", data["url"], data["feed_title"]
+        db.add_source, onboarding.conn, chat_id, data.get("kind") or "rss",
+        data["url"], data["title"],
     )
     if source_id is None:
         await cb.answer("Такой источник уже добавлен", show_alert=True)
     else:
-        log.info("Добавлен источник chat=%s: %s", chat_id, data["url"])
+        log.info("Добавлен источник chat=%s: %s %s", chat_id, data.get("kind"), data["url"])
         await cb.answer("Добавлено")
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, chat_id)
-    verb = "уже в списке" if source_id is None else f"добавлено: «{data['feed_title']}»"
+    verb = "уже в списке" if source_id is None else f"добавлено: «{data['title']}»"
     await cb.message.edit_text(
         f"{verb}.\n\n" + _list_text(rows), reply_markup=keyboards.sources_manage_kb(rows)
     )

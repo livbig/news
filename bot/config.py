@@ -15,3 +15,11 @@ ALLOWED_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # И1: единственный захардкоженный RSS-источник (переопределяется для тестов)
 FEED_URL = os.environ.get("BOT_FEED_URL", "https://www.fxstreet.com/rss/news")
+
+# И6: типы источников (FR-06..FR-09). Шаблоны переопределяются в тестах
+# на маршруты fixture-сервера (TESTPLAN §1.3)
+TWITTER_BRIDGE_URL_TEMPLATE = os.environ.get("TWITTER_BRIDGE_URL_TEMPLATE", "")
+TGWEB_URL_TEMPLATE = os.environ.get("BOT_TGWEB_URL_TEMPLATE", "https://t.me/s/{name}")
+REDDIT_RSS_TEMPLATE = os.environ.get(
+    "BOT_REDDIT_RSS_TEMPLATE", "https://www.reddit.com/r/{name}/new/.rss"
+)

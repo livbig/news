@@ -189,11 +189,19 @@ def delete_source(conn, source_id) -> None:
     conn.commit()
 
 
-def enabled_rss_sources(conn, chat_id) -> list[tuple]:
+def enabled_sources(conn, chat_id) -> list[sqlite3.Row]:
+    """Включённые источники чата всех собираемых типов (И6)."""
     return conn.execute(
-        "SELECT id, url FROM sources WHERE chat_id=? AND enabled=1 AND kind='rss' ORDER BY id",
+        "SELECT id, kind, url, last_post_id FROM sources"
+        " WHERE chat_id=? AND enabled=1 AND kind IN ('rss','html','tgweb','twitter')"
+        " ORDER BY id",
         (chat_id,),
     ).fetchall()
+
+
+def set_last_post_id(conn, source_id, value: int) -> None:
+    conn.execute("UPDATE sources SET last_post_id=? WHERE id=?", (value, source_id))
+    conn.commit()
 
 
 def set_source_status(conn, source_id, status: str, msg) -> None:
