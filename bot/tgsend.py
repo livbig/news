@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import os
+from contextlib import asynccontextmanager, suppress
 
 import httpx
 from pipeline.telegram import (  # R7/R8: боевые чанкинг и санитайз HTML
@@ -12,6 +15,34 @@ from pipeline.telegram import (  # R7/R8: боевые чанкинг и сан�
 from . import config
 
 log = logging.getLogger("bot.tgsend")
+
+TYPING_DELAY = float(os.environ.get("BOT_TYPING_DELAY", "1.0"))  # порог ~1 с (FR-15)
+TYPING_REFRESH = 4.0  # sendChatAction живёт ~5 с — обновляем чаще
+
+
+async def _typing_loop(bot, chat_id):
+    await asyncio.sleep(TYPING_DELAY)  # быстрее порога — индикатор не нужен
+    while True:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception as exc:
+            log.warning("sendChatAction chat=%s: %s", chat_id, exc)
+        await asyncio.sleep(TYPING_REFRESH)
+
+
+@asynccontextmanager
+async def with_typing(bot, chat_id):
+    """«Печатает…» при операциях дольше ~1 с — сбор, LLM (FR-15, TC-30)."""
+    if not chat_id:
+        yield  # служебный chat_id=0 (mock-прогон) — индикатор не нужен
+        return
+    task = asyncio.create_task(_typing_loop(bot, chat_id))
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 def _post(text: str, chat_id, parse_mode: str | None) -> bool:

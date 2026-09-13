@@ -70,18 +70,22 @@ def setUpModule():
     SERVER = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=SERVER.serve_forever, daemon=True).start()
     BASE = f"http://127.0.0.1:{SERVER.server_address[1]}"
-    # реальные токены/чаты из .env не должны утекать в тесты: mock-отправка (NFR-05)
+    # реальные токены/чаты из .env не должны утекать в тесты: mock-отправка (NFR-05);
+    # с И5 build_delta зовёт LLM — ключ тоже обнуляем (сводка в тестах = mock)
     from bot import config
-    _SAVED_CONFIG = (config.TOKEN, config.ALLOWED_CHAT_ID)
+    from pipeline import config as pconfig
+    _SAVED_CONFIG = (config.TOKEN, config.ALLOWED_CHAT_ID, pconfig.LLM_API_KEY)
     config.TOKEN = ""
     config.ALLOWED_CHAT_ID = ""
+    pconfig.LLM_API_KEY = ""
 
 
 def tearDownModule():
     SERVER.shutdown()
     SERVER.server_close()
     from bot import config
-    config.TOKEN, config.ALLOWED_CHAT_ID = _SAVED_CONFIG
+    from pipeline import config as pconfig
+    config.TOKEN, config.ALLOWED_CHAT_ID, pconfig.LLM_API_KEY = _SAVED_CONFIG
 
 
 class TC08HttpRetries(unittest.TestCase):
@@ -310,7 +314,9 @@ class NFR02Isolation(ChatCase):
             out = self.stdout_of(lambda: self.send("/digest"))
             self.assertIn("Первая новость", out)  # сводка построена и доставлена
             self.assertEqual(Handler.HITS.get("/always500"), 4)  # ретраи были
-            self.assertIn("Не удалось собрать 1", "\n".join(self.bot.sent_texts()))
+            # с И5 деградация — футером сводки (план §1.5, TC-20), не отдельным сообщением
+            self.assertIn("Не удалось собрать 1 источник(ов)", out)
+            self.assertIn(f"{BASE}/always500", out)
             row = self.db.get_source(self.conn(), dead)
             self.assertEqual(row["status"], "error")
             self.assertTrue(row["status_msg"])

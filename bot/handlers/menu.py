@@ -17,20 +17,15 @@ router = Router()
 
 
 async def run_digest(bot, chat_id: int) -> None:
-    """Предпросмотр дельты (D8): сбор + сводка без сдвига окна (И4 — mock; LLM — И5).
-    Отказы источников изолированы (NFR-02), предупреждение — отдельным
-    сообщением (футер сводки — И5)."""
-    total, errors = await asyncio.to_thread(collect.collect_enabled, onboarding.conn, chat_id)
-    text, _ids = await asyncio.to_thread(digest.build_delta, onboarding.conn, chat_id)
-    if text is None:
-        await asyncio.to_thread(tgsend.send_chat, digest.EMPTY_TEXT, chat_id)
-    else:
+    """Предпросмотр дельты (D8): сбор + сводка без сдвига окна.
+    «Печатает…» при долгом сборе/LLM (FR-15), деградация источников —
+    футером сводки (план §1.5), отказы изолированы (NFR-02)."""
+    async with tgsend.with_typing(bot, chat_id):
+        total, errors = await asyncio.to_thread(collect.collect_enabled, onboarding.conn, chat_id)
+        text, _ids = await asyncio.to_thread(digest.build_delta, onboarding.conn, chat_id)
+        text = digest.with_footer(text or digest.EMPTY_TEXT, errors)
         await asyncio.to_thread(tgsend.send_chat, text, chat_id)
-        log.info("digest chat=%s: +%d новых, предпросмотр отправлен", chat_id, total)
-    if errors:
-        await bot.send_message(
-            chat_id, f"⚠ Не удалось собрать {len(errors)} источник(ов) — подробности в /sources."
-        )
+    log.info("digest chat=%s: +%d новых, предпросмотр отправлен", chat_id, total)
 
 
 @router.message(Command("digest"))

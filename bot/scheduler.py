@@ -110,16 +110,19 @@ async def fsm_sweeper(bot, storage):
 # --- планировщик слотов (И4, D25) ------------------------------------------------
 
 async def _prepare(conn, chat_id, slot, now):
-    """Фаза подготовки (D25): сбор включённых источников + текст сводки (mock — И5)."""
+    """Фаза подготовки (D25): сбор включённых источников + текст сводки
+    (LLM/mock — И5); деградация — футером (§1.5)."""
     from . import collect, digest
 
     try:
-        await asyncio.to_thread(collect.collect_enabled, conn, chat_id)
+        _total, errors = await asyncio.to_thread(collect.collect_enabled, conn, chat_id)
         text, ids = await asyncio.to_thread(digest.build_delta, conn, chat_id)
     except Exception as exc:
         log.error("prep chat=%s: %s", chat_id, exc)
         return None
-    return {"slot": slot, "text": text or digest.EMPTY_TEXT, "ids": ids}
+    return {"slot": slot,
+            "text": digest.with_footer(text or digest.EMPTY_TEXT, errors),
+            "ids": ids}
 
 
 async def _deliver(conn, chat_id, prep, now) -> bool:

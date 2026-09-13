@@ -52,16 +52,20 @@ def setUpModule():
     threading.Thread(target=SERVER.serve_forever, daemon=True).start()
     BASE = f"http://127.0.0.1:{SERVER.server_address[1]}"
     from bot import config
-    _SAVED_CONFIG = (config.TOKEN, config.ALLOWED_CHAT_ID)
+    from pipeline import config as pconfig
+    # с И5 build_delta зовёт LLM: ключ из .env обнуляем — сводки в тестах = mock
+    _SAVED_CONFIG = (config.TOKEN, config.ALLOWED_CHAT_ID, pconfig.LLM_API_KEY)
     config.TOKEN = ""  # отправка — mock-вывод в stdout (NFR-05)
     config.ALLOWED_CHAT_ID = ""
+    pconfig.LLM_API_KEY = ""
 
 
 def tearDownModule():
     SERVER.shutdown()
     SERVER.server_close()
     from bot import config
-    config.TOKEN, config.ALLOWED_CHAT_ID = _SAVED_CONFIG
+    from pipeline import config as pconfig
+    config.TOKEN, config.ALLOWED_CHAT_ID, pconfig.LLM_API_KEY = _SAVED_CONFIG
 
 
 # --- TC-07 (unit): окно дельты — потребление digest_items (D26) -----------------

@@ -121,6 +121,7 @@ class TC42NoTokens(unittest.TestCase):
             TELEGRAM_TOKEN="",
             TELEGRAM_TOKEN_DEV="",
             TELEGRAM_CHAT_ID="",
+            LLM_API_KEY="",  # с И5 build_delta зовёт LLM: пустой ключ = mock (NFR-05)
             BOT_FEED_URL=feed,
             BOT_DB_PATH="/tmp/iter1_tc42_bot.db",
         )
