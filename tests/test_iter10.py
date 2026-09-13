@@ -147,21 +147,23 @@ class TestDispatcher(unittest.TestCase):
 
     def test_resources_lazy_wiring(self):
         # прод-сборка webhook: ленивые conn+Bot+dp, handlers.init(conn);
-        # build_dispatcher мокаем — синглтон диспетчера не трогаем (его
-        # storage в единственном экземпляре на процесс собирается первым
-        # вызвавшим: в Vercel это webhook с PgStorage)
-        fake_dp = object()
+        # build_dispatcher и db.connect мокаем: синглтон диспетчера не трогаем
+        # (его storage собирается первым вызвавшим — в Vercel это PgStorage),
+        # а тест не должен открывать продовой коннект Supabase
+        fake_dp, fake_conn = object(), object()
         with mock.patch.object(bconfig, "TOKEN", "1:TEST"), \
              mock.patch.object(api_telegram, "_conn", None), \
              mock.patch.object(api_telegram, "_bot", None), \
              mock.patch.object(api_telegram, "_dp", None), \
              mock.patch.object(api_telegram, "build_dispatcher",
                                return_value=fake_dp) as build, \
+             mock.patch.object(api_telegram.db, "connect", return_value=fake_conn), \
              mock.patch("bot.handlers.init") as init:
             conn, bot, dp = api_telegram._resources()
         build.assert_called_once()
         self.assertIsInstance(build.call_args.args[0], PgStorage)
-        init.assert_called_once_with(conn)
+        init.assert_called_once_with(fake_conn)
+        self.assertIs(conn, fake_conn)
         self.assertIs(dp, fake_dp)
         self.assertIsInstance(bot, Bot)
 
