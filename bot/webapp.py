@@ -5,8 +5,6 @@ initData (HMAC бот-токена), JSON API CRUD источников и ра�
 (BOT_WEBAPP_PUBLIC_URL: туннель/хостинг) — он же идёт в web_app-кнопки и
 меню-кнопку бота; без него кнопка даёт локальный адрес текстом.
 Сервер недоступен (порт занят/не стартовал) → кнопка в боте уводит в меню (fallback)."""
-import hashlib
-import hmac
 import json
 import logging
 import threading
@@ -15,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, db, scheduler
 from .handlers.onboarding import TIME_RE, allowed
+from .webauth import verify_init_data  # общий модуль: локальный сервер и Vercel (М3)
 
 log = logging.getLogger("bot.webapp")
 
@@ -86,31 +85,6 @@ document.getElementById('save').onclick = saveTimes;
   refresh();
 })();
 </script></body></html>"""
-
-
-def verify_init_data(raw: str, token: str) -> dict | None:
-    """Проверка подписи initData (доки Telegram Mini Apps): secret =
-    HMAC_SHA256(key=token, msg=b'WebAppData'); hash = HMAC_SHA256(secret,
-    data_check_string) над полученными парами (без hash) в алфавитном порядке."""
-    pairs, got_hash = [], None
-    for chunk in raw.split("&"):
-        k, _, v = chunk.partition("=")
-        if k == "hash":
-            got_hash = v
-        else:
-            pairs.append((k, v))
-    if not got_hash or not pairs:
-        return None
-    check = "\n".join(f"{k}={v}" for k, v in sorted(pairs))
-    secret = hmac.new(token.encode(), b"WebAppData", hashlib.sha256).digest()
-    calc = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calc, got_hash):
-        return None
-    try:
-        user = json.loads(urllib.parse.unquote(dict(pairs).get("user", "")))
-    except ValueError:
-        return None
-    return user if isinstance(user, dict) and "id" in user else None
 
 
 class Handler(BaseHTTPRequestHandler):

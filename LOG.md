@@ -3,6 +3,35 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — Итерация М3 (Vercel: Mini App + API) — код ЗАВЕРШЁН, живое переключение после действий пользователя
+
+- **Дифы**: `bot/webauth.py` (новый: `verify_init_data` вынесен из webapp.py —
+  общий для локального сервера и Vercel); `bot/webapp.py` (импорт, диф нулевой
+  по поведению); `api/index.py` — Starlette-ASGI: GET `/` (PAGE), GET
+  `/api/sources`, POST `toggle|delete`, GET/POST `/api/settings` — тот же JSON-
+  контракт, что у webapp; conn на инстанс функции лениво + lock; `_set_conn`
+  для тестов; `api/__init__.py` пустой; `public/index.html` = PAGE (генерируется
+  из bot/webapp.py, CDN отдаёт «/» — rewrites не перекрывают файловую систему);
+  `vercel.json` — rewrites `/api/*` и `/*` → `/api/index` (путь запроса
+  сохраняется — роутинг Starlette видит оригинал); requirements +=
+  `starlette==1.6.0`; `tests/test_iter9.py` — 13 тестов (TestClient, fresh
+  ':memory:', сид как в iter8, автоpизация через sign_init_data).
+- **Отступление от плана (зафиксировано)**: «python 3.13 в vercel.json» —
+  версия runtime в Vercel выбирается в настройках проекта, в файл не пишется;
+  CI гоняет 3.13, дефолт Vercel совместим.
+- **TC-45** (сабпроцесс `python -m bot` с BOT_DB_PATH) защищён гардом — даже
+  с SUPABASE_DB_URL в .env идёт в sqlite (проверено обоими прогонами).
+- **Верификация**: 99/99 PG (docker), 99/99 sqlite.
+- **Действия пользователя до завершения М3 (живая часть)**:
+  1) Vercel → Add New… → Project → Import livbig/news (framework Other —
+     определится сам; в настройках выбрать Python 3.13, если доступно);
+  2) Project Settings → Environment Variables: `TELEGRAM_TOKEN`,
+     `TELEGRAM_CHAT_ID`, `SUPABASE_DB_URL` (+ `LLM_API_KEY`, `LLM_MODEL` —
+     пригодятся в М4/М5) — значения из локального `.env`;
+  3) сообщить агенту домен `https://<proj>.vercel.app` → бот переставит
+     меню-кнопку (`.env` `BOT_WEBAPP_PUBLIC_URL` + kickstart), туннель снесём;
+     проверка миниаппа с телефона — критерий «готово».
+
 ## 2026-09-13 — Итерация М2 (Supabase Postgres) — ЗАВЕРШЕНА
 
 - **Данные Supabase**: пользователь дал project URL + publishable key (недостаточно
