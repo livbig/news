@@ -104,7 +104,7 @@ async def setup_menu_button(bot) -> None:
 # последним, все текстовые хендлеры выше сидят на StateFilter.
 
 async def run_chat(bot, chat_id: int, text: str) -> None:
-    async with tgsend.with_typing(bot, chat_id):  # LLM думает до 180 с (FR-15)
+    async with tgsend.with_typing(bot, chat_id):  # LLM думает до 240 с (М4: потолок функции 300 с)
         answer = await asyncio.to_thread(llm.ask, onboarding.conn, chat_id, text)
     if answer:
         await asyncio.to_thread(tgsend.send_chat, answer, chat_id)

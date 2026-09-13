@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS chat_history (
   text       TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS fsm (
+  key        TEXT PRIMARY KEY,
+  state      TEXT,
+  data       TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processed_updates (
+  update_id BIGINT PRIMARY KEY,
+  at        TEXT NOT NULL
+);
 """
 
 # PG-вариант: AUTOINCREMENT → IDENTITY, datetime('now') → to_char(now()) ISO Z.
@@ -135,6 +145,16 @@ CREATE TABLE IF NOT EXISTS chat_history (
   text       TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT to_char(now() AT TIME ZONE 'UTC',
                                             'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+);
+CREATE TABLE IF NOT EXISTS fsm (
+  key        TEXT PRIMARY KEY,
+  state      TEXT,
+  data       TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processed_updates (
+  update_id BIGINT PRIMARY KEY,
+  at        TEXT NOT NULL
 );
 """
 
@@ -510,3 +530,26 @@ def news_context(conn, chat_id, limit=120) -> str:
         (chat_id, limit),
     ).fetchall()
     return "\n".join(f"{r['title']} — {r['url']}" for r in rows)
+
+
+# --- М4: webhook ------------------------------------------------------------------
+
+def mark_update_seen(conn, update_id) -> bool:
+    """Первичная доставка update_id → True (и запись); повторная (webhook
+    доставляет at-least-once) → False. Тот же паттерн, что insert_item."""
+    try:
+        conn.execute(
+            "INSERT INTO processed_updates (update_id, at) VALUES (%s, %s)",
+            (update_id, now_iso()),
+        )
+        conn.commit()
+        return True
+    except (sqlite3.IntegrityError, pg_errors.UniqueViolation):
+        return False
+
+
+def cleanup_processed_updates(conn, hours=24) -> None:
+    """ISO-метки сравниваются лексикографически — дедуп-журнал не растёт."""
+    conn.execute("DELETE FROM processed_updates WHERE at < %s",
+                 (minus_iso(now_iso(), hours),))
+    conn.commit()

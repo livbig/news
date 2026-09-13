@@ -98,9 +98,13 @@ def summarize(items_text: str) -> str:
     return mock_summary(items_text, reason=f"LLM недоступна после 2 попыток: {last_exc}")
 
 
+# М4: вебхук живёт в функции с потолком 300 с — диалог ждёт LLM до 240 с
+CHAT_READ_TIMEOUT = 240.0
+
+
 def chat(messages: list[dict], news_context: str) -> str:
     system = CHAT_SYSTEM_PROMPT + "\n\nКонтекст последних статей ленты:\n" + news_context
-    return _call(system, messages, 3000, read_timeout=180.0)
+    return _call(system, messages, 3000, read_timeout=CHAT_READ_TIMEOUT)
 
 
 def mock_summary(items_text: str, reason: str = "LLM_API_KEY не задан") -> str:

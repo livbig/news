@@ -39,3 +39,6 @@ WEBAPP_BIND = os.environ.get("BOT_WEBAPP_BIND", "127.0.0.1")
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 # М2: PG для тестов ':memory:' (локальный docker / CI service container).
 TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")
+
+# М4: секрет вебхука (setWebhook secret_token); пусто → эндпоинт отключён.
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")

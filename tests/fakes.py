@@ -11,14 +11,9 @@ from aiogram.types import CallbackQuery, Chat, Message, User
 
 @functools.lru_cache(maxsize=1)
 def shared_dispatcher() -> Dispatcher:
-    from bot.handlers import menu, onboarding, settings, sources
+    from bot.handlers import build_dispatcher
 
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(onboarding.router)  # команды и FSM-опрос — раньше прочих
-    dp.include_router(sources.router)  # CRUD источников и мастер добавления
-    dp.include_router(settings.router)  # настройки расписания (И4)
-    dp.include_router(menu.router)  # catch-all колбэков — последним
-    return dp
+    return build_dispatcher()  # М4: единый синглтон на процесс (роутеры одни)
 
 
 class FakeBot(Bot):

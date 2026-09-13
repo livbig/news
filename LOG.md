@@ -3,7 +3,44 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — Итерация М4 (Webhook бота, dev-токен)
+
+- **Дифы**: `bot/pgstorage.py` (новый: FSM aiogram в таблице `fsm` —
+  key TEXT PK, state TEXT, data TEXT JSON, updated_at; sync-драйвер за
+  asyncio.to_thread + лок, BaseStorage 3.31: set/get_state, set/get_data,
+  reset_state, close, wait_until_ready); `bot/db.py` — таблицы `fsm` и
+  `processed_updates` в обеих схемах (SCHEMA_SQLITE/SCHEMA_PG), хелперы
+  `mark_update_seen` (паттерн insert_item через IntegrityError — идентично
+  на обоих диалектах) и `cleanup_processed_updates` (>24 ч); 
+  `bot/handlers/__init__.py` — `build_dispatcher(storage=None)` — сборка
+  роутеров без polling; **синглтон на процесс** (роутеры aiogram нельзя
+  подключить к двум Dispatcher — учитывается и в tests/fakes.shared_dispatcher,
+  который теперь делегирует build_dispatcher); `api/telegram.py` (новый):
+  проверка `X-Telegram-Bot-Api-Secret-Token` (пустой секрет в конфиге →
+  эндпоинт отключён), дедуп update_id (повтор → 200 `{"duplicate":true}`
+  без обработки), `dp.feed_update` до конца запроса (фоновых задач на Vercel
+  нет), ошибка обработки → 500 (апдейт уже помечен — повторная доставка не
+  задвоит ответ); маршрут `/api/telegram` в api/index.py; `bot/config.py` —
+  `TELEGRAM_WEBHOOK_SECRET`; `vercel.json` — `maxDuration: 300` (потолок
+  Hobby-fluid, план); `pipeline/llm.py` — `CHAT_READ_TIMEOUT = 240.0`
+  (было 180) + тест контракта; `tests/test_iter10.py` — 21 тест.
+- **Отступления от плана (зафиксированы)**: 1) `fsm.data` — TEXT с JSON-строкой,
+  а не JSONB (единый диалект %s на оба движка; валидность контролируем кодом);
+  2) метка неактивности — `fsm.updated_at`, обновляется автоматически при
+  каждом set_state/set_data; onboarding.ACTIVE-словарь оставлен для Mac-режима
+  (вебхук-таймауты чистит cron-sweeper М5 по updated_at); «формула» из плана
+  соблюдена: timestamp живёт в fsm-таблице.
+- **Нюанс тестов**: unittest discover грузит test_iter10 раньше test_iter2 →
+  ранний импорт bot.scheduler фиксирует FSM-таймаут до setdefault в iter2 —
+  в test_iter10 продублирован `os.environ.setdefault("BOT_FSM_TIMEOUT", "1")`.
+- **Верификация**: 120/99→120 тестов на sqlite и на Postgres (docker news-pg).
+- **Дальше (живая часть, нужно от пользователя)**: dev-токен от @BotFather
+  (второй бот) → .env TELEGRAM_TOKEN_DEV → preview-деплой Vercel (env
+  DEV только для preview) → setWebhook с секретом → ручной онбординг dev-бота
+  в Telegram (критерий М4) + проверка дедупа.
+
 ## 2026-09-13 — Итерация М3 — ЖИВАЯ ЧАСТЬ ЗАВЕРШЕНА (миниапп на постоянном домене, туннель снесён)
+
 
 - **Фикс vercel.json**: modern `rewrites` донесли до функции путь-приёмник
   `/api/index`, Starlette 404 на всех `/api/*`; переключено на legacy

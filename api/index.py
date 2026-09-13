@@ -15,6 +15,7 @@ from bot import db, scheduler
 from bot.handlers.onboarding import TIME_RE, allowed
 from bot.webapp import MAX_SLOTS, PAGE
 from bot.webauth import verify_init_data
+from api.telegram import telegram_webhook
 from bot import config
 
 _conn = None
@@ -132,4 +133,5 @@ app = Starlette(routes=[
     Route("/api/sources/toggle", _toggle, methods=["POST"]),
     Route("/api/sources/delete", _delete, methods=["POST"]),
     Route("/api/settings", _settings, methods=["GET", "POST"]),
+    Route("/api/telegram", telegram_webhook, methods=["POST"]),  # М4
 ])
