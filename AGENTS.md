@@ -59,15 +59,17 @@
   раздельны — откат ничего не теряет.
 - Ручные CLI-прогоны pipeline (run/digest) — только при остановленном агенте
   (SQLite-блокировки, R5).
-- Mini App с телефона (И8б): Bot API принимает web_app-кнопки только с https —
-  нужен публичный URL, ведущий на локальный порт панели (8087). Сейчас поднят
-  быстрый туннель cloudflared (`--protocol http2`, QUIC у провайдера заблокирован):
-  `cloudflared tunnel --url http://127.0.0.1:8087 --protocol http2` — URL плавающий
-  при рестарте туннеля! Новый URL → в `.env` `BOT_WEBAPP_PUBLIC_URL=https://…` →
-  `kickstart` (бот сам переставит меню-кнопку при старте). Постоянное решение:
-  именованный туннель (нужен Cloudflare-аккаунт и домен) или хостинг/VPS с
-  reverse proxy на этот порт. URL умер → кнопки дают текст-подсказку, бот жив
-  (fallback, FR-17).
+- Mini App (М3): постоянный https-домен `https://news-livbig.vercel.app`
+  (Vercel, проект `news`, деплой = git push в ветку `public` → `origin public:main`;
+  api/ + public/ + vercel.json). В `.env` `BOT_WEBAPP_PUBLIC_URL=https://news-livbig.vercel.app`,
+  `kickstart` переставляет меню-кнопку. cloudflared-туннель снесён (2026-09-13).
+  Локальный `webapp.py` (порт 8087) остаётся для dev/тестов. URL умер → кнопки
+  дают текст-подсказку, бот жив (fallback, FR-17).
+- Vercel-доступ: scoped-токен в `.env` `VERCEL_TOKEN` (проектные эндпоинты API;
+  `/v2/user` для него недоступен — «User not found» это норма). Env проекта:
+  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SUPABASE_DB_URL, LLM_API_KEY, LLM_MODEL
+  (+ служебные). TELEGRAM_TOKEN_DEV на Vercel держать удалённым: bot/config
+  отдаёт ему приоритет — с ним Mini App API подписывает не тем токеном.
 
 ## Конфигурация
 
