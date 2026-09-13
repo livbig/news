@@ -1,6 +1,6 @@
 # News Digest Pipeline
 
-Личный агрегатор новостей: RSS-фиды → SQLite → LLM-сводка (Z.ai GLM) → Telegram-бот.
+Личный агрегатор новостей: RSS-фиды → Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-сводка (Z.ai GLM) → Telegram-бот.
 
 ## Команды
 
@@ -8,6 +8,8 @@
 - `python3 -m pipeline digest` — сформировать и отправить сводку (без токена TG — сохранить в digests/ и вывести в stdout)
 - `python3 -m pipeline check` — проверка здоровья всех фидов
 - `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
+- `BOT_TEST_PG_URL= python3 -m unittest discover -s tests` — регрессия на sqlite; без пустого префикса `:memory:` тестов идёт в PG (docker `news-pg`, порт 54329; в CI — service container)
+- `python3 scripts/migrate_sqlite_to_pg.py` — перенос bot.db → Supabase (идемпотентен)
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.
 

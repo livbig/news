@@ -150,7 +150,7 @@ class TC06SpecialChars(unittest.TestCase):
         # из title фида, а FR-16 требует буквальной доставки любого внешнего текста
         db.insert_item(conn, sid, "http://ex.test/s4", "Q3 <b>drop</b> & layoffs", None)
         titles = [r[0] for r in conn.execute(
-            "SELECT title FROM items WHERE source_id=?", (sid,))]
+            "SELECT title FROM items WHERE source_id=%s", (sid,))]
         self.assertIn("Q3 <b>drop</b> & layoffs", titles)
         text, _ids = digest.build_delta(conn, 42)
         self.assertIn("MOCK", text)

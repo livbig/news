@@ -144,18 +144,18 @@ class TC11ValidRSS(unittest.TestCase):
         self.assertTrue(sid)
         self.assertEqual(collect.collect_source(conn, sid, f"{BASE}/valid.xml"), 3)
         rows = conn.execute(
-            "SELECT title, url, published FROM items WHERE source_id=? ORDER BY id", (sid,)
+            "SELECT title, url, published FROM items WHERE source_id=%s ORDER BY id", (sid,)
         ).fetchall()
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[0]["title"], "Первая новость")
         self.assertTrue(all(len(r["published"]) == 20 and r["published"].endswith("Z") for r in rows))
         self.assertEqual(
-            conn.execute("SELECT status FROM sources WHERE id=?", (sid,)).fetchone()[0], "ok"
+            conn.execute("SELECT status FROM sources WHERE id=%s", (sid,)).fetchone()[0], "ok"
         )
         # повторный сбор — дублей нет (NFR-03)
         self.assertEqual(collect.collect_source(conn, sid, f"{BASE}/valid.xml"), 0)
         self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM items WHERE source_id=?", (sid,)).fetchone()[0], 3
+            conn.execute("SELECT COUNT(*) FROM items WHERE source_id=%s", (sid,)).fetchone()[0], 3
         )
 
 
@@ -284,7 +284,7 @@ class TC23DeleteSource(ChatCase):
         sid, _ = self._add_fixture_sources()
         self.stdout_of(lambda: self.send("/digest"))  # у источника есть items
         self.assertGreater(
-            self.conn().execute("SELECT COUNT(*) FROM items WHERE source_id=?", (sid,)).fetchone()[0], 0
+            self.conn().execute("SELECT COUNT(*) FROM items WHERE source_id=%s", (sid,)).fetchone()[0], 0
         )
         self.press(f"src:d:{sid}")
         self.assertIn("Удалить", self.bot.edited_texts()[-1])
@@ -292,7 +292,7 @@ class TC23DeleteSource(ChatCase):
         self.assertIn("Удалено", self.bot.edited_texts()[-1])
         self.assertIsNone(self.db.get_source(self.conn(), sid))
         self.assertEqual(
-            self.conn().execute("SELECT COUNT(*) FROM items WHERE source_id=?", (sid,)).fetchone()[0],
+            self.conn().execute("SELECT COUNT(*) FROM items WHERE source_id=%s", (sid,)).fetchone()[0],
             0,
         )  # каскад ON DELETE CASCADE
         # сводка строится без него; второй источник ещё жив

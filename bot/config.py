@@ -33,3 +33,9 @@ WEBAPP_PORT = int(os.environ.get("BOT_WEBAPP_PORT", "8087"))
 # этом Mac; по умолчанию 127.0.0.1 — туннель/прокси локально).
 WEBAPP_PUBLIC_URL = os.environ.get("BOT_WEBAPP_PUBLIC_URL", "").rstrip("/")
 WEBAPP_BIND = os.environ.get("BOT_WEBAPP_BIND", "127.0.0.1")
+
+# М2: Supabase Postgres (transaction pooler) — задан → бот работает на PG
+# вместо sqlite (BOT_DB_PATH принудительно возвращает sqlite, TC-45).
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
+# М2: PG для тестов ':memory:' (локальный docker / CI service container).
+TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")

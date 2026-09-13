@@ -114,7 +114,7 @@ class TestAuth(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([s["id"] for s in body["sources"]],
                          [r[0] for r in DB.execute(
-                             "SELECT id FROM sources WHERE chat_id=? ORDER BY id",
+                             "SELECT id FROM sources WHERE chat_id=%s ORDER BY id",
                              (self.CHAT,)).fetchall()])
 
     def test_tampered_hash_rejected(self):
@@ -158,13 +158,13 @@ class TestSourcesApi(unittest.TestCase):
         status, body = api("/api/sources/toggle", init=sign_init_data(self.CHAT),
                            body={"id": self.ids[0]})
         self.assertEqual((status, body["ok"]), (200, True))
-        self.assertEqual(DB.execute("SELECT enabled FROM sources WHERE id=?",
+        self.assertEqual(DB.execute("SELECT enabled FROM sources WHERE id=%s",
                                     (self.ids[0],)).fetchone()[0], 0)
         # повтор — состояние стабильно (NFR-03)
         status, body = api("/api/sources/toggle", init=sign_init_data(self.CHAT),
                            body={"id": self.ids[0]})
         self.assertEqual((status, body["enabled"]), (200, True))
-        self.assertEqual(DB.execute("SELECT enabled FROM sources WHERE id=?",
+        self.assertEqual(DB.execute("SELECT enabled FROM sources WHERE id=%s",
                                     (self.ids[0],)).fetchone()[0], 1)
 
     def test_delete_removes_with_items(self):
@@ -174,9 +174,9 @@ class TestSourcesApi(unittest.TestCase):
         status, body = api("/api/sources/delete", init=sign_init_data(self.CHAT),
                            body={"id": self.ids[0]})
         self.assertEqual((status, body["ok"]), (200, True))
-        self.assertIsNone(DB.execute("SELECT id FROM sources WHERE id=?",
+        self.assertIsNone(DB.execute("SELECT id FROM sources WHERE id=%s",
                                      (self.ids[0],)).fetchone())
-        self.assertEqual(DB.execute("SELECT COUNT(*) FROM items WHERE source_id=?",
+        self.assertEqual(DB.execute("SELECT COUNT(*) FROM items WHERE source_id=%s",
                                     (self.ids[0],)).fetchone()[0], 0)  # каскад (TC-23)
 
     def test_foreign_source_not_accessible(self):
@@ -186,7 +186,7 @@ class TestSourcesApi(unittest.TestCase):
         status, _ = api("/api/sources/delete", init=sign_init_data(self.CHAT),
                         body={"id": self.other_ids[0]})
         self.assertEqual(status, 404)
-        self.assertIsNotNone(DB.execute("SELECT id FROM sources WHERE id=?",
+        self.assertIsNotNone(DB.execute("SELECT id FROM sources WHERE id=%s",
                                         (self.other_ids[0],)).fetchone())
 
     def test_unknown_id_and_bad_body(self):
@@ -218,17 +218,17 @@ class TestSettingsApi(unittest.TestCase):
                          {"times": ["07:30", "21:00"]})
         # повторная запись того же — идемпотентна (NFR-03)
         api("/api/settings", init=sign_init_data(self.CHAT), body={"times": ["21:00", "7:30"]})
-        self.assertEqual(json.loads(DB.execute("SELECT send_times FROM users WHERE chat_id=?",
+        self.assertEqual(json.loads(DB.execute("SELECT send_times FROM users WHERE chat_id=%s",
                                                (self.CHAT,)).fetchone()[0]),
                          ["07:30", "21:00"])
 
     def test_invalid_values_rejected(self):
-        before = DB.execute("SELECT send_times FROM users WHERE chat_id=?",
+        before = DB.execute("SELECT send_times FROM users WHERE chat_id=%s",
                             (self.CHAT,)).fetchone()[0]
         for times in ([], ["09:00", "12:00", "15:00"], ["25:00"], ["9:99"], ["abc"], "09:00"):
             status, _ = api("/api/settings", init=sign_init_data(self.CHAT), body={"times": times})
             self.assertEqual(status, 400, times)
-        self.assertEqual(DB.execute("SELECT send_times FROM users WHERE chat_id=?",
+        self.assertEqual(DB.execute("SELECT send_times FROM users WHERE chat_id=%s",
                                     (self.CHAT,)).fetchone()[0], before)
 
     def test_unknown_chat_starts_empty(self):

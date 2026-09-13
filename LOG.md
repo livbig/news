@@ -3,6 +3,42 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — Итерация М2 (Supabase Postgres) — ЗАВЕРШЕНА
+
+- **Данные Supabase**: пользователь дал project URL + publishable key (недостаточно
+  для SQL) и затем connection string — direct-хост `db.…supabase.co:5432` НЕ
+  резолвится (IPv6-only, у Mac нет маршрута). Регион проекта оказался не
+  eu-central-1: скан pooler-хостов нашёл tenant на **aws-1-eu-west-1** (Дублин).
+  Итоговый `SUPABASE_DB_URL` = transaction pooler `aws-1-eu-west-1…:6543`.
+- **Диалект (bot/db.py переписан)**: код говорит на PG-диалекте (%s, ON CONFLICT
+  DO NOTHING, RETURNING id, IDENTITY); sqlite остаётся rollback-движком через
+  прослойку `_SqliteConn` (%s→?, transaction(), курсор с переводом). Строки —
+  `_Row` (dict + позиционный доступ + tuple-распаковка). `prepare_threshold=None`
+  — psycopg НЕ готовит statements (pgbouncer transaction mode; в плане стояло
+  «0» — это неверно: 0 = «готовить всегда», именно на этом ловится
+  DuplicatePreparedStatement). `executemany` у psycopg3 живёт на курсоре →
+  хелпер `db.executemany()`. `add_source`: fetchone() ДО commit (sqlite требует
+  дочитать RETURNING-курсор). chat_history.created_at: PG-дефолт
+  `to_char(now() AT TIME ZONE 'UTC', …)` — тот же ISO-Z формат.
+- **Тесты**: `db.connect(":memory:")` при заданном `BOT_TEST_PG_URL` = временная
+  схема в PG (изоляция как у sqlite-памяти, вызовы не менялись); SQL самих
+  тестов переведён на PG-диалект (`=?` → `=%s`); TC-44: +psycopg в белый список.
+  Регрессия **86/86 на обоих движках**: PG = локальный docker (OrbStack, контейнер
+  `news-pg`, порт 127.0.0.1:54329, docker установлен с одобрения пользователя —
+  «легко переезжать между хостингами»), sqlite = принудительно `BOT_TEST_PG_URL=`.
+  CI: service postgres:16-alpine, шаг «unittest (sqlite)» + «unittest (postgres)».
+- **Миграция**: `scripts/migrate_sqlite_to_pg.py` (явные id + ON CONFLICT DO
+  NOTHING + setval последовательностей) — идемпотентен (двойной прогон: counts
+  совпали). Перенос: users 1, sources 2, items/digests/chat_history — пусто
+  (bot.db на момент переноса). Агент на время миграции остановлен (bootout).
+- **Cutover**: `.env` += `SUPABASE_DB_URL`, агент запущен (bootstrap) — бот
+  поллит @cumulativenewsbot с облачной БД; сквозной smoke записи: подписанный
+  initData → локальная панель → toggle/delete → строка в Supabase изменилась
+  и вернулась (панель — тот же процесс бота). Меню-кнопка: стандартная (М3).
+  Откат: убрать `SUPABASE_DB_URL` из .env (или BOT_DB_PATH) → бот снова на
+  bot.db (снимок на 18:42 2026-09-13), либо revert коммита М2.
+- Верификация: 86/86 PG (docker), 86/86 sqlite, CI зелёный (оба шага).
+
 ## 2026-09-13 — GitHub-гигиена: livbig-only; старт М2
 
 - **Требование пользователя**: в проекте не должно быть следов других GitHub-аккаунтов,

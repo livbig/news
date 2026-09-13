@@ -216,7 +216,7 @@ class ChatCase(unittest.TestCase):
             httpmod._sleep, collect._pause = real
 
     def item_count(self, source_id=None):
-        sql = "SELECT COUNT(*) FROM items" + (" WHERE source_id=?" if source_id else "")
+        sql = "SELECT COUNT(*) FROM items" + (" WHERE source_id=%s" if source_id else "")
         return self.conn().execute(sql, ((source_id,) if source_id else ())).fetchone()[0]
 
 
@@ -231,7 +231,7 @@ class TC13HtmlCollect(unittest.TestCase):
         row = {"id": sid, "kind": "html", "url": f"{BASE}/html_list.html", "last_post_id": 0}
         self.assertEqual(collect.collect_one(conn, row), 3)
         rows = conn.execute(
-            "SELECT url, title, published FROM items WHERE source_id=? ORDER BY id", (sid,)
+            "SELECT url, title, published FROM items WHERE source_id=%s ORDER BY id", (sid,)
         ).fetchall()
         self.assertEqual([r["url"] for r in rows],
                          [f"{BASE}/articles/one", f"{BASE}/articles/two", f"{BASE}/articles/three"])
@@ -239,11 +239,11 @@ class TC13HtmlCollect(unittest.TestCase):
         # даты на странице нет → fetched_at-семантика (план §1.2)
         self.assertTrue(all(r["published"].endswith("Z") for r in rows))
         self.assertEqual(conn.execute(
-            "SELECT status FROM sources WHERE id=?", (sid,)).fetchone()[0], "ok")
+            "SELECT status FROM sources WHERE id=%s", (sid,)).fetchone()[0], "ok")
         # повторный сбор — дедуп по (source_id, url_hash)
         self.assertEqual(collect.collect_one(conn, row), 0)
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM items WHERE source_id=?", (sid,)).fetchone()[0], 3)
+            "SELECT COUNT(*) FROM items WHERE source_id=%s", (sid,)).fetchone()[0], 3)
 
 
 class TC14GarbagePage(ChatCase):
@@ -288,7 +288,7 @@ class TC15TgwebMaster(ChatCase):
         self.assertIn("Пост десять", out)  # посты канала — в сводке
         self.assertEqual(self.item_count(rows[0]["id"]), 3)  # первый сбор: посты 8..10
         self.assertEqual(
-            self.conn().execute("SELECT last_post_id FROM sources WHERE id=?",
+            self.conn().execute("SELECT last_post_id FROM sources WHERE id=%s",
                                 (rows[0]["id"],)).fetchone()[0], 10)
         self.assertEqual(list(Handler.HITS), ["/tgweb/testch"])  # одна страница (R6)
         self.assertEqual(self.db.get_source(self.conn(), rows[0]["id"])["status"], "ok")
@@ -305,7 +305,7 @@ class TC15TgwebMaster(ChatCase):
         self.assertEqual(pauses, [collect.TGWEB_PAUSE])  # щадящая пауза (FR-07)
         self.assertEqual(self.item_count(rows[0]["id"]), 5)  # +12, +11; 10, 9 не дублированы
         self.assertEqual(
-            self.conn().execute("SELECT last_post_id FROM sources WHERE id=?",
+            self.conn().execute("SELECT last_post_id FROM sources WHERE id=%s",
                                 (rows[0]["id"],)).fetchone()[0], 12)
 
 
@@ -373,7 +373,7 @@ class TC18Reddit429(ChatCase):
         self.assertEqual(pauses, [1, 2, 4])  # нарастающий backoff
         self.assertIn("Первая новость", out)  # валидный RSS собран, сводка отправлена
         status = self.conn().execute(
-            "SELECT status, status_msg FROM sources WHERE url=?", (f"{BASE}/r/slow/new/.rss",)
+            "SELECT status, status_msg FROM sources WHERE url=%s", (f"{BASE}/r/slow/new/.rss",)
         ).fetchone()
         self.assertEqual(status["status"], "error")
         self.assertTrue(status["status_msg"])

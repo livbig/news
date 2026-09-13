@@ -80,11 +80,11 @@ class TC04Idempotent(unittest.TestCase):
             self.assertEqual(collect.collect_source(conn, sid2, feed), 3)
             self.assertEqual(collect.collect_source(conn, sid2, feed), 0)  # повтор — 0 дублей
             self.assertEqual(
-                conn.execute("SELECT COUNT(*) FROM items WHERE source_id=?", (sid2,)).fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM items WHERE source_id=%s", (sid2,)).fetchone()[0],
                 3,
             )
             # published нормализован в ISO у элементов с датой и без
-            pubs = [r[0] for r in conn.execute("SELECT published FROM items WHERE source_id=?", (sid2,))]
+            pubs = [r[0] for r in conn.execute("SELECT published FROM items WHERE source_id=%s", (sid2,))]
             self.assertTrue(all(len(p) == 20 and p.endswith("Z") for p in pubs), pubs)
         finally:
             srv.shutdown()

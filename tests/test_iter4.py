@@ -104,7 +104,7 @@ class TC07DeltaWindow(unittest.TestCase):
         )
         # digest_items связал все элементы со сводкой
         self.assertEqual(
-            conn.execute("SELECT COUNT(*) FROM digest_items WHERE digest_id=?",
+            conn.execute("SELECT COUNT(*) FROM digest_items WHERE digest_id=%s",
                          (digest_id,)).fetchone()[0], 4
         )
 
@@ -221,13 +221,13 @@ class ChatCase(unittest.TestCase):
             "%Y-%m-%dT%H:%M:%SZ"
         )
         self.conn().execute(
-            "UPDATE users SET last_sent_at=? WHERE chat_id=?", (old, self.CHAT)
+            "UPDATE users SET last_sent_at=%s WHERE chat_id=%s", (old, self.CHAT)
         )
         self.conn().commit()
 
     def digests_count(self):
         return self.conn().execute(
-            "SELECT COUNT(*) FROM digests WHERE chat_id=?", (self.CHAT,)
+            "SELECT COUNT(*) FROM digests WHERE chat_id=%s", (self.CHAT,)
         ).fetchone()[0]
 
 
@@ -252,7 +252,7 @@ class TC24SettingsSlot(ChatCase):
         self.press("m:next")
         self.assertIn("Расписание обновлено", self.bot.edited_texts()[-1])
         times = self.conn().execute(
-            "SELECT send_times FROM users WHERE chat_id=?", (self.CHAT,)
+            "SELECT send_times FROM users WHERE chat_id=%s", (self.CHAT,)
         ).fetchone()[0]
         self.assertIn(slot_str, times)  # БД обновлена (FR-10)
 
@@ -272,7 +272,7 @@ class TC24SettingsSlot(ChatCase):
         self.assertEqual(
             self.conn().execute(
                 "SELECT COUNT(*) FROM digest_items di JOIN digests d ON d.id=di.digest_id"
-                " WHERE d.chat_id=?", (self.CHAT,)
+                " WHERE d.chat_id=%s", (self.CHAT,)
             ).fetchone()[0], 3
         )
         # повторный тик на том же слоте — дублей нет (одна транзакция, одна запись)
@@ -328,7 +328,7 @@ class TC26NoNewItems(ChatCase):
 
         # A не отдаёт нового (тот же фид); B принёс один новый элемент
         sid_b = self.conn().execute(
-            "SELECT id FROM sources WHERE chat_id=? AND url=?", (self.CHAT, f"{BASE}/valid2.xml")
+            "SELECT id FROM sources WHERE chat_id=%s AND url=%s", (self.CHAT, f"{BASE}/valid2.xml")
         ).fetchone()[0]
         self.db.insert_item(self.conn(), sid_b, "http://it.test/2/new", "Новая от B",
                             "2026-09-13T10:00:00Z")
@@ -339,7 +339,7 @@ class TC26NoNewItems(ChatCase):
         self.assertNotIn("Первая новость", out)  # старые пункты A/B не повторяются
         self.assertNotIn("Другая новость", out)
         row = self.conn().execute(
-            "SELECT item_count FROM digests WHERE chat_id=? ORDER BY id DESC LIMIT 1",
+            "SELECT item_count FROM digests WHERE chat_id=%s ORDER BY id DESC LIMIT 1",
             (self.CHAT,),
         ).fetchone()
         self.assertEqual(row[0], 1)
@@ -368,7 +368,7 @@ class TC27EmptyPeriod(ChatCase):
         self.assertNotIn("MOCK", out)  # и нет «пустой» mock-сводки без пунктов
         row = self.conn().execute(
             "SELECT item_count, last_sent_at FROM digests d"
-            " JOIN users u ON u.chat_id=d.chat_id WHERE u.chat_id=?"
+            " JOIN users u ON u.chat_id=d.chat_id WHERE u.chat_id=%s"
             " ORDER BY d.id DESC LIMIT 1", (self.CHAT,)
         ).fetchone()
         self.assertEqual(row["item_count"], 0)
@@ -389,7 +389,7 @@ class TC28CatchUp(ChatCase):
         self.assertEqual(out.count("Первая новость"), 1)
         self.assertEqual(self.digests_count(), 1)
         last = self.conn().execute(
-            "SELECT last_sent_at FROM users WHERE chat_id=?", (self.CHAT,)
+            "SELECT last_sent_at FROM users WHERE chat_id=%s", (self.CHAT,)
         ).fetchone()[0]
         # last_sent_at сдвинут ровно один раз (= моменту прогона)
         self.assertEqual(
@@ -399,7 +399,7 @@ class TC28CatchUp(ChatCase):
         self.assertEqual(
             self.conn().execute(
                 "SELECT COUNT(*) FROM digest_items di JOIN digests d ON d.id=di.digest_id"
-                " WHERE d.chat_id=?", (self.CHAT,)
+                " WHERE d.chat_id=%s", (self.CHAT,)
             ).fetchone()[0], 5
         )
         out, sent = self.slots_out(probe + timedelta(minutes=1))

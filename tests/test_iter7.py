@@ -94,7 +94,7 @@ class TC46Pinning(unittest.TestCase):
 # --- TC-44 (unit): аудит зависимостей (NFR-01) ----------------------------------
 
 class TC44Dependencies(unittest.TestCase):
-    ALLOWED_THIRDPARTY = {"aiogram", "httpx", "feedparser", "bs4"}  # D11: +bs4
+    ALLOWED_THIRDPARTY = {"aiogram", "httpx", "feedparser", "bs4", "psycopg"}  # D11: +bs4, М2: +psycopg
     BANNED = ("telethon", "pyrogram", "django", "fastapi", "celery", "flask")
 
     def test_bot_imports_are_known(self):
@@ -256,7 +256,7 @@ class TestDialogAsk(DialogCase):
         self.assertIn("Золото растёт", context)
         self.assertIn("http://ex.test/1", context)
         rows = self.conn().execute(
-            "SELECT role, text FROM chat_history WHERE chat_id=? ORDER BY id",
+            "SELECT role, text FROM chat_history WHERE chat_id=%s ORDER BY id",
             (self.CHAT,),
         ).fetchall()
         self.assertEqual([r["role"] for r in rows], ["user", "assistant"])
@@ -297,7 +297,7 @@ class TestDialogAsk(DialogCase):
         self.assertIn("LLM недоступен", text)
         self.assertIn("сеть недоступна", text)
         roles = [r["role"] for r in self.conn().execute(
-            "SELECT role FROM chat_history WHERE chat_id=?", (self.CHAT,)).fetchall()]
+            "SELECT role FROM chat_history WHERE chat_id=%s", (self.CHAT,)).fetchall()]
         self.assertEqual(roles, ["user"])  # сбой не пишется в историю
 
     def test_empty_answer_no_assistant_row(self):
@@ -307,7 +307,7 @@ class TestDialogAsk(DialogCase):
         text = llm.ask(self.conn(), self.CHAT, "вопрос")
         self.assertIn("пустой ответ", text)
         roles = [r["role"] for r in self.conn().execute(
-            "SELECT role FROM chat_history WHERE chat_id=?", (self.CHAT,)).fetchall()]
+            "SELECT role FROM chat_history WHERE chat_id=%s", (self.CHAT,)).fetchall()]
         self.assertEqual(roles, ["user"])
 
     def test_no_key_no_api_call_no_history(self):
@@ -319,7 +319,7 @@ class TestDialogAsk(DialogCase):
         self.assertIn("LLM_API_KEY", text)
         self.assertEqual(self.calls, [])  # в API не ходим
         self.assertEqual(self.conn().execute(
-            "SELECT COUNT(*) FROM chat_history WHERE chat_id=?", (self.CHAT,)).fetchone()[0], 0)
+            "SELECT COUNT(*) FROM chat_history WHERE chat_id=%s", (self.CHAT,)).fetchone()[0], 0)
 
 
 class TestDialogHandler(DialogCase):
@@ -370,9 +370,9 @@ class TC41HappyPath(ChatCase):
         self.press("m:next")
         self.press("c:save")
         self.assertIsNotNone(conn.execute(
-            "SELECT onboarded_at FROM users WHERE chat_id=?", (self.CHAT,)).fetchone()[0])
+            "SELECT onboarded_at FROM users WHERE chat_id=%s", (self.CHAT,)).fetchone()[0])
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM sources WHERE chat_id=?", (self.CHAT,)).fetchone()[0], 0)
+            "SELECT COUNT(*) FROM sources WHERE chat_id=%s", (self.CHAT,)).fetchone()[0], 0)
 
         # 2. свой источник через мастер (валидный RSS с fixture)
         self.press("add:start")
@@ -380,7 +380,7 @@ class TC41HappyPath(ChatCase):
         self.send(f"{BASE}/rss.xml")
         self.press("a:confirm")
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM sources WHERE chat_id=? AND origin='manual'",
+            "SELECT COUNT(*) FROM sources WHERE chat_id=%s AND origin='manual'",
             (self.CHAT,)).fetchone()[0], 1)
 
         # 3. плановая сводка: слот через ~70 с (prep успевает по D25)
@@ -390,24 +390,24 @@ class TC41HappyPath(ChatCase):
         out = ""
         while time.time() < deadline:
             out += self.stdout_of(lambda: asyncio.run(scheduler.slots_once(conn)))
-            if conn.execute("SELECT COUNT(*) FROM digests WHERE chat_id=?",
+            if conn.execute("SELECT COUNT(*) FROM digests WHERE chat_id=%s",
                             (self.CHAT,)).fetchone()[0]:
                 break
             time.sleep(5)
 
         self.assertIn("Первая новость", out)  # элементы своего RSS в сводке
         digest_row = conn.execute(
-            "SELECT id, item_count FROM digests WHERE chat_id=?", (self.CHAT,)).fetchone()
+            "SELECT id, item_count FROM digests WHERE chat_id=%s", (self.CHAT,)).fetchone()
         self.assertEqual(digest_row["item_count"], 3)
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM digest_items WHERE digest_id=?",
+            "SELECT COUNT(*) FROM digest_items WHERE digest_id=%s",
             (digest_row["id"],)).fetchone()[0], 3)
         self.assertIsNotNone(conn.execute(
-            "SELECT last_sent_at FROM users WHERE chat_id=?", (self.CHAT,)).fetchone()[0])
+            "SELECT last_sent_at FROM users WHERE chat_id=%s", (self.CHAT,)).fetchone()[0])
         # повторный тик без доставки — дублей нет (FR-12)
         self.stdout_of(lambda: asyncio.run(scheduler.slots_once(conn)))
         self.assertEqual(conn.execute(
-            "SELECT COUNT(*) FROM digests WHERE chat_id=?", (self.CHAT,)).fetchone()[0], 1)
+            "SELECT COUNT(*) FROM digests WHERE chat_id=%s", (self.CHAT,)).fetchone()[0], 1)
 
 
 # --- TC-45 (e2e): логи прогона и журнал (NFR-06) ---------------------------------

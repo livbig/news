@@ -168,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
                     for r in rows]})
             if path == "/api/settings":
                 row = _conn.execute(
-                    "SELECT send_times FROM users WHERE chat_id=?", (chat_id,)).fetchone()
+                    "SELECT send_times FROM users WHERE chat_id=%s", (chat_id,)).fetchone()
                 times = scheduler.parse_times(row[0]) if row else []
                 return self._send(200, {"times": times})
         self._send(404, {"error": "нет такого пути"})
