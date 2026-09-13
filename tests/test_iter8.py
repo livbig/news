@@ -21,17 +21,18 @@ TOKEN = "12345:TESTTOKEN"
 
 
 def sign_init_data(user_id, token=TOKEN, auth_date="1726200000"):
-    """initData по алгоритму Telegram: hash = HMAC(secret, data_check_string),
-    secret = HMAC(token, 'WebAppData'); data_check_string — по полученным
-    (percent-encoded) парам без hash, отсортированным по ключу."""
+    """initData по алгоритму Telegram: строка url-encoded, но hash =
+    HMAC(secret, data_check_string) по ДЕКОДИРОВАННЫМ парам без hash,
+    отсортированным по ключу (пример из доков — распакованный user JSON)."""
     fields = {
         "auth_date": auth_date,
         "query_id": "AAFtest",
-        "user": json.dumps({"id": user_id, "first_name": "T"}, separators=(",", ":")),
+        "signature": "AAIBm3R0YXlrZWQ",
+        "user": json.dumps({"id": user_id, "first_name": "Тест Юзер"},
+                           separators=(",", ":"), ensure_ascii=False),
     }
     encoded = "&".join(f"{k}={urllib.parse.quote(v, safe='')}" for k, v in fields.items())
-    pairs = sorted(p.split("=", 1) for p in encoded.split("&"))
-    check = "\n".join(f"{k}={v}" for k, v in pairs)
+    check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
     secret = hmac.new(token.encode(), b"WebAppData", hashlib.sha256).digest()
     digest = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return f"{encoded}&hash={digest}"
@@ -116,6 +117,22 @@ class TestAuth(unittest.TestCase):
                          [r[0] for r in DB.execute(
                              "SELECT id FROM sources WHERE chat_id=%s ORDER BY id",
                              (self.CHAT,)).fetchall()])
+
+    def test_check_string_uses_decoded_values(self):
+        # М3.2: Telegram подписывает DECODED-пары (доки: user={"id":...});
+        # подпись по encoded-парам (старый баг) должна отвергаться
+        from bot.webauth import verify_init_data
+        user = verify_init_data(sign_init_data(self.CHAT), TOKEN)
+        self.assertEqual(user["id"], self.CHAT)
+        fields = {"auth_date": "1", "user": json.dumps(
+            {"id": self.CHAT, "first_name": "Тест"}, separators=(",", ":"),
+            ensure_ascii=False)}
+        encoded = "&".join(f"{k}={urllib.parse.quote(v, safe='')}"
+                           for k, v in fields.items())
+        secret = hmac.new(TOKEN.encode(), b"WebAppData", hashlib.sha256).digest()
+        buggy = hmac.new(secret, "\n".join(sorted(
+            p for p in encoded.split("&"))).encode(), hashlib.sha256).hexdigest()
+        self.assertIsNone(verify_init_data(f"{encoded}&hash={buggy}", TOKEN))
 
     def test_tampered_hash_rejected(self):
         init = sign_init_data(self.CHAT)
