@@ -7,6 +7,7 @@ import hashlib
 import importlib.metadata
 import importlib.util
 import io
+import os
 import re
 import subprocess
 import sys
@@ -129,6 +130,10 @@ class TC37NewsDbUntouched(unittest.TestCase):
         from pipeline import config as pconfig
 
         news = Path(pconfig.DB_PATH)
+        created = not news.exists()
+        if created:  # свежий клон: пустой news.db — инвариант «бот не трогает» тот же
+            news.touch()
+            self.addCleanup(news.unlink)
         self.assertTrue(news.exists())
         before = (news.stat().st_mtime_ns, hashlib.sha256(news.read_bytes()).hexdigest())
 
@@ -409,10 +414,27 @@ class TC41HappyPath(ChatCase):
 
 class TC45Logging(unittest.TestCase):
     def test_logs_and_journal(self):
+        # NFR-06 самодостаточно (критерий М1 «свежий клон»): боевой mock-прогон
+        # с недоступным фидом сам пишет ошибку источника с URL в logs/run.log
+        env = dict(
+            os.environ,
+            TELEGRAM_TOKEN="",
+            TELEGRAM_TOKEN_DEV="",
+            TELEGRAM_CHAT_ID="",
+            LLM_API_KEY="",
+            BOT_FEED_URL="http://127.0.0.1:1/rss",
+            BOT_DB_PATH="/tmp/iter7_tc45_bot.db",
+        )
+        if os.path.exists(env["BOT_DB_PATH"]):
+            os.unlink(env["BOT_DB_PATH"])
+        proc = subprocess.run([sys.executable, "-m", "bot"], capture_output=True,
+                              text=True, env=env, cwd=ROOT, timeout=120)
+        self.assertIn("Источник недоступен", proc.stdout)  # ветка FAIL в run_mock
         run_log = ROOT / "logs" / "run.log"
         self.assertTrue(run_log.exists())
         content = run_log.read_text(errors="replace")
         self.assertIn("FAIL", content)  # ошибки источников с URL (NFR-02, TC-21)
+        self.assertIn("http://127.0.0.1:1/rss", content)
         self.assertIn("Итерация 7", (ROOT / "LOG.md").read_text())
 
 
