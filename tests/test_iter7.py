@@ -435,7 +435,9 @@ class TC45Logging(unittest.TestCase):
         content = run_log.read_text(errors="replace")
         self.assertIn("FAIL", content)  # ошибки источников с URL (NFR-02, TC-21)
         self.assertIn("http://127.0.0.1:1/rss", content)
-        self.assertIn("Итерация 7", (ROOT / "LOG.md").read_text())
+        log_md = ROOT / "LOG.md"
+        if log_md.exists():  # публичный снапшот журнала не содержит — проверка локальная
+            self.assertIn("Итерация 7", log_md.read_text())
 
 
 if __name__ == "__main__":
