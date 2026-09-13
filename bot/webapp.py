@@ -1,6 +1,9 @@
-"""Mini App (FR-17): локальный веб-сервер того же процесса — авторизация по
-Telegram initData (HMAC бот-токена), JSON API CRUD источников и расписания,
-одностраничный UI. Только stdlib (NFR-01); слушает 127.0.0.1.
+"""Mini App (FR-17): веб-сервер того же процесса — авторизация по Telegram
+initData (HMAC бот-токена), JSON API CRUD источников и расписания,
+одностраничный HTML5/JS UI. Только stdlib (NFR-01); слушает BOT_WEBAPP_BIND
+(по умолчанию 127.0.0.1). С телефона открывается через публичный https-URL
+(BOT_WEBAPP_PUBLIC_URL: туннель/хостинг) — он же идёт в web_app-кнопки и
+меню-кнопку бота; без него кнопка даёт локальный адрес текстом.
 Сервер недоступен (порт занят/не стартовал) → кнопка в боте уводит в меню (fallback)."""
 import hashlib
 import hmac
@@ -231,21 +234,36 @@ _conn = None
 _lock = threading.Lock()  # sqlite-конн один (R5): API-запросы сериализуем
 
 
+def public_url() -> str | None:
+    """Публичный https-URL Mini App (BOT_WEBAPP_PUBLIC_URL) или None.
+    Не-https отклоняется: web_app-кнопки Bot API принимает только с https."""
+    u = config.WEBAPP_PUBLIC_URL
+    if not u:
+        return None
+    if not u.startswith("https://"):
+        log.warning("BOT_WEBAPP_PUBLIC_URL игнорируется (нужен https): %s", u)
+        return None
+    return u
+
+
 def start(conn, port=None) -> str | None:
-    """Поднять сервер; URL или None (порт занят — fallback в боте, FR-17)."""
+    """Поднять сервер; URL или None (порт занят — fallback в боте, FR-17).
+    URL — публичный https (BOT_WEBAPP_PUBLIC_URL), если задан, иначе локальный."""
     global _server, _conn, URL
     if _server is not None:
         return URL
     _conn = conn
+    bind = config.WEBAPP_BIND
     try:
-        _server = ThreadingHTTPServer(("127.0.0.1", config.WEBAPP_PORT if port is None else port),
+        _server = ThreadingHTTPServer((bind, config.WEBAPP_PORT if port is None else port),
                                       Handler)
     except OSError as exc:
-        log.warning("Веб-панель не запущена (порт %s): %s", config.WEBAPP_PORT, exc)
+        log.warning("Веб-панель не запущена (bind %s, порт %s): %s",
+                    bind, config.WEBAPP_PORT, exc)
         return None
-    URL = f"http://127.0.0.1:{_server.server_address[1]}"
+    URL = public_url() or f"http://127.0.0.1:{_server.server_address[1]}"
     threading.Thread(target=_server.serve_forever, daemon=True, name="bot-webapp").start()
-    log.info("Веб-панель: %s", URL)
+    log.info("Веб-панель: %s (bind %s)", URL, bind)
     return URL
 
 

@@ -26,6 +26,7 @@ async def run():
     sweeper = asyncio.create_task(fsm_sweeper(bot, dp.storage))
     slots = asyncio.create_task(slots_loop(onboarding.conn))
     webapp.start(onboarding.conn)  # И8: Mini App; не поднялся → fallback-кнопка (FR-17)
+    await menu.setup_menu_button(bot)  # И8b: https-URL → меню-кнопка открывает Mini App с телефона
     log.info("Бот запускается (long polling)")
     try:
         await dp.start_polling(bot)

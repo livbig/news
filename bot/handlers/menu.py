@@ -6,7 +6,8 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                           MenuButtonDefault, MenuButtonWebApp, Message, WebAppInfo)
 
 from .. import collect, digest, keyboards, llm, tgsend, webapp
 from . import onboarding
@@ -71,11 +72,31 @@ async def cq_webapp(cb: CallbackQuery, state: FSMContext):
     try:
         await cb.message.answer("Веб-панель: источники и расписание.", reply_markup=kb)
     except TelegramBadRequest:
-        # Bot API требует https для web_app-кнопок; локальный путь — текстом
+        # web_app-кнопка требует https; без публичного URL (локальный путь) — текстом
         await cb.message.answer(
-            f"Веб-панель: {webapp.URL} — откройте в браузере на этом Mac "
-            "(авторизация — из Telegram Desktop).")
+            f"Веб-панель: {webapp.URL} — " +
+            ("откройте в браузере на этом Mac (авторизация — из Telegram Desktop)."
+             if webapp.URL.startswith("http://") else
+             "сервис недоступен — управление в боте."))
     await cb.answer()
+
+
+# --- И8b: меню-кнопка Telegram → Mini App (FR-17: «открывается из меню») ----------
+
+async def setup_menu_button(bot) -> None:
+    """Публичный https-URL задан → меню-кнопка бота открывает Mini App (с телефона,
+    в любом чате с ботом); нет — сброс на стандартное меню команд (без мёртвой
+    кнопки от прошлого URL)."""
+    url = webapp.public_url() if webapp.running() else None
+    try:
+        if url:
+            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
+                text="Новости", web_app=WebAppInfo(url=url)))
+        else:
+            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+        log.info("menu button: %s", url or "стандартное меню команд")
+    except Exception as exc:  # сеть/Bot API — поллинг важнее кнопки
+        log.warning("setChatMenuButton не удался: %s", exc)
 
 
 # --- И7: диалоговый режим (R11, D27) ---------------------------------------------
