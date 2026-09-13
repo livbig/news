@@ -3,6 +3,22 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — Итерация М3.1 (починка миниаппа: подключение Telegram WebApp SDK)
+
+- **Корневая причина бага «серый текст»**: `public/index.html` и `bot/webapp.py`
+  PAGE не подключали `https://telegram.org/js/telegram-web-app.js` →
+  `window.Telegram` undefined → `initData` пустой → `Authorization: 'tma '` →
+  API 401 → страница навсегда показывает fallback «Панель доступна из
+  Telegram…». Smoke-тесты М3 били по API с подписанными init-данными напрямую,
+  мимо браузера — потому не ловили.
+- **Диф (минимальный)**: `<script src="https://telegram.org/js/telegram-web-app.js"></script>`
+  перед инлайн-скриптом в обоих файлах (тексты PAGE и public/index.html
+  идентичны — было и осталось, теперь это фиксирует тест).
+- **Тест**: test_iter9 `test_telegram_sdk_connected_before_inline` — SDK-строка
+  есть в файле и в PAGE, грузится до инлайн-скрипта, тексты идентичны.
+- **Верификация**: sqlite 121/121 OK, PG (docker news-pg) 121/121 OK.
+- Без редизайна/theme-параметров/hash-fallback — по границам плана М3.1.
+
 ## 2026-09-13 — Итерация М4 (Webhook бота, dev-токен)
 
 - **Дифы**: `bot/pgstorage.py` (новый: FSM aiogram в таблице `fsm` —

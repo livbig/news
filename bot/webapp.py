@@ -37,6 +37,7 @@ label{margin-right:10px}
 <h2>Расписание сводок</h2><div id="times"></div>
 <p><button id="save" hidden>Сохранить расписание</button></p>
 <div id="msg"></div>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }

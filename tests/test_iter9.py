@@ -63,6 +63,18 @@ class TestPage(unittest.TestCase):
         self.assertIn("Источники", r.text)
         self.assertNotIn(TOKEN, r.text)  # токен не утекает в разметку
 
+    def test_telegram_sdk_connected_before_inline(self):
+        # М3.1: без telegram-web-app.js window.Telegram undefined → initData
+        # пустой → 401 → вечный fallback-текст (баг серого текста)
+        from bot import webapp
+        src = Path(ROOT, "public", "index.html").read_text()
+        for text, name in ((src, "public/index.html"), (webapp.PAGE, "webapp.PAGE")):
+            self.assertIn("https://telegram.org/js/telegram-web-app.js", text)
+            self.assertLess(text.index("telegram-web-app.js"),
+                            text.index("const tg ="),  # SDK грузится до инлайн-скрипта
+                            f"{name}: SDK должен подключаться до инлайн-скрипта")
+        self.assertEqual(src, webapp.PAGE)  # тексты идентичны (Vercel CDN и фолбэк)
+
 
 class TestAuth(ApiBase):
     def test_no_header_rejected(self):
