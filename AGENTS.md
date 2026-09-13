@@ -20,10 +20,14 @@
   безопасных путей: bot/, pipeline/, tests/ без TESTPLAN.md, requirements.txt,
   .github/, .gitignore, .env.example) в https://github.com/livbig/news (ПУБЛИЧНЫЙ;
   у livbig Trade controls запрещает приватные репо).
-- Обновить публикацию: `git checkout public` → `git rm -rf --cached . -q` →
-  `git add bot pipeline tests requirements.txt .github .gitignore .env.example` →
-  `git rm --cached -q tests/TESTPLAN.md` → commit → `git push origin public:main`
-  → `git checkout main`.
+- Обновить публикацию (ветку public пересобирать ЦЕЛИКОМ через orphan):
+  `git checkout --orphan public2` → `git rm -rf --cached . -q` →
+  `git add bot pipeline tests requirements.txt .github .gitignore .env.example scripts` →
+  `git rm --cached -q tests/TESTPLAN.md` → commit → `git branch -M public` →
+  `git push -f origin public:main` → `git checkout -f main`.
+  НЕ делать `git checkout public` + add: worktree откатывается к СТАРОМУ
+  снапшоту (ошибка migr-2; ловится проверкой `git diff --stat HEAD main` до пуша
+  — в безопасных путях должен отличаться только TESTPLAN.md).
 - Аккаунт gh: ТОЛЬКО livbig — проект целиком в нём; другие gh-аккаунты вылогинены
   из CLI (требование пользователя 2026-09-13). Git-креденшелы привязаны к
   активному gh-аккаунту (`gh auth setup-git`) — при 403 проверить `gh auth status`.
