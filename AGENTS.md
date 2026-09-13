@@ -22,11 +22,10 @@
   `git add bot pipeline tests requirements.txt .github .gitignore .env.example` →
   `git rm --cached -q tests/TESTPLAN.md` → commit → `git push origin public:main`
   → `git checkout main`.
-- Аккаунты gh: livbig (активный), kirpich-team (ДРУГОЙ проект пользователя —
-  НЕ пушить сюда; репо kirpich-team/news создано по ошибке 2026-09-13, удаляется
-  пользователем). Git-креденшелы привязаны к активному gh-аккаунту
-  (`gh auth setup-git`) — при 403 «denied to kirpich-team» проверить
-  `gh auth status`.
+- Аккаунт gh: ТОЛЬКО livbig — проект целиком в нём; другие gh-аккаунты вылогинены
+  из CLI (требование пользователя 2026-09-13). Git-креденшелы привязаны к
+  активному gh-аккаунту (`gh auth setup-git`) — при 403 проверить `gh auth status`.
+  Локальная git identity репо — livbig (глобальная ~/.gitconfig не трогается).
 - Перед каждым пушем — скан снапшота на идентификаторы (chat_id, @usernames,
   /Users/, токен-паттерны): `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
 

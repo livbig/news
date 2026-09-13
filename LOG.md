@@ -3,10 +3,33 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — GitHub-гигиена: livbig-only; старт М2
+
+- **Требование пользователя**: в проекте не должно быть следов других GitHub-аккаунтов,
+  всё целиком в livbig. Выполнено: второй gh-аккаунт вылогинен (`gh auth logout`;
+  `gh auth status` → только livbig); git identity зарегистрирована локально в репо
+  (livbig) — глобальная ~/.gitconfig не тронута (ею пользуется другой проект);
+  ВСЯ история main+public перезаписана (git filter-branch: авторы/коммиттеры →
+  livbig, упоминания стороннего аккаунта в сообщениях коммитов вычищены), затем
+  refs/original + reflog + `gc --prune=now`; force-push `public:main` обновил
+  снапшот; `grep -ri` по дереву и `git log --all` — 0 совпадений.
+- **Гигиена Mini App**: мёртвый `BOT_WEBAPP_PUBLIC_URL` (quick-туннель, домен не
+  резолвится) удалён из `.env` → после рестарта меню-кнопка сбрасывается на
+  стандартную, инлайн-кнопка отдаёт fallback-текст (FR-17). Стабильный URL вернётся
+  в М3 (Vercel).
+- **Supabase (М2)**: пользователь прислал project URL + publishable key — этого
+  НЕ достаточно: psycopg3 подключается напрямую к Postgres, нужен connection string
+  (Project Settings → Database → Connection string → Transaction pooler, порт 6543,
+  пароль БД). Publishable/anon ключи — для JS SDK, не для SQL. Ждём `SUPABASE_DB_URL`.
+- **Vercel**: импорт livbig/news через веб-интерфейс согласован — так и делаем на М3
+  (без vercel CLI).
+- **Локальный PG для тестов М2**: docker/orbstack/psql в системе не найдены →
+  по умолчанию CI-only (PG service container в Actions); OrbStack — опционально позже.
+
 ## 2026-09-13 — ИНЦИДЕНТ и переезд на livbig/news (публичный снапшот)
 
-- **ИНЦИДЕНТ**: push М1 ушёл в github.com/kirpich-team/news — это ДРУГОЙ проект
-  пользователя; разрешение на публикацию туда не давалось. По указанию пользователя
+- **ИНЦИДЕНТ**: push М1 ушёл в репо news стороннего gh-аккаунта пользователя —
+  это ДРУГОЙ проект; разрешение на публикацию туда не давалось. По указанию пользователя
   репо будет удалено им вручную (delete_repo-скоуп не запрашивали; device-flow
   авторизации дважды срывался: в браузере был активен livbig). Локальная история
   не пострадала, секретов в пушах не было (аудит ниже).
@@ -22,18 +45,20 @@
   `git rm --cached -q tests/TESTPLAN.md` → commit → `git push origin public:main` →
   `git checkout main`. НЕ пушить main в origin.
 - **Аудит снапшота перед пушем**: персональные идентификаторы (chat_id 603522950,
-  @cumulativenewsbot, @Testernewsbotbot id, туннель pac-utilities, kirpich/fifth,
+  @cumulativenewsbot, @Testernewsbotbot id, туннель pac-utilities, fifth,
   /Users/…) — только в LOG.md, в снапшот не входит; скан токен-паттернов по
   истории и снапшоту — чисто (единственные совпадения — фейковые константы
   12345:TESTTOKEN в тестах И8); runtime-зависимостей от исключённых файлов нет —
   TC-45 сделал tolerant к отсутствию LOG.md (commit 97dd8e6 на main).
-- **Аккаунты gh**: залогинены livbig (активный, скоупы repo+workflow — workflow
-  добавлен device-flow) и kirpich-team (не активный). Git-креденшелы переключены
-  на gh-активный аккаунт (`gh auth setup-git`) — иначе push шёл от kirpich-team
-  из macOS keychain (403). ПУШИТЬ ТОЛЬКО ВЕТКУ public. CI livbig/news: success
+- **Аккаунты gh**: livbig (активный, скоупы repo+workflow — workflow добавлен
+  device-flow); второй gh-аккаунт пользователя вылогинен из CLI по его требованию
+  (2026-09-13: проект целиком в livbig). Git-креденшелы переключены на активный
+  аккаунт (`gh auth setup-git`) — иначе push шёл от стороннего аккаунта из
+  macOS keychain (403). ПУШИТЬ ТОЛЬКО ВЕТКУ public. CI livbig/news: success
   (86/86, python 3.13).
 - Остаток М1 (CI/push) перевыполнен на новом ремоуте. Действия пользователя:
-  удалить kirpich-team/news через веб (Settings → Danger Zone); М2 — Supabase.
+  удалить созданный по ошибке репо news в стороннем аккаунте через веб
+  (Settings → Danger Zone); М2 — Supabase.
 
 ## 2026-09-13 — Итерация М1 (GitHub: packaging, CI, свежий клон) — ЗАВЕРШЕНА
 
@@ -65,10 +90,10 @@
   Коммиты: dbd8796 (герметичность iter8/8b), 2b7db7b (migr-1 packaging),
   b932da8 (герметичность TC-37/45).
 - **gh CLI установлен** (brew, 2.100.0); `gh auth status` → уже аутентифицирован
-  (kirpich-team, скоупы repo+workflow) — «действия пользователя» из плана М1
-  оказались выполнены.
+  (сторонний аккаунт пользователя, скоупы repo+workflow) — «действия пользователя»
+  из плана М1 оказались выполнены.
 - **Ремоут создан и запушен**: `gh repo create news --private --source . --push`
-  → https://github.com/kirpich-team/news (вся история iter1…migr-1).
+  → репо news в стороннем аккаунте (создано по ошибке; см. инцидент выше).
 - **CI зелёный**: первый прогон push — tests ✓ 1m23s (python 3.13, 86/86).
   Аннотация про Node 20 deprecation в actions/checkout@v4, setup-python@v5 —
   не блокер (форсится на Node 24); обновить пины можно отдельно.
