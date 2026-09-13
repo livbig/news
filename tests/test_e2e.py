@@ -75,7 +75,7 @@ class TestMiniAppE2E(unittest.TestCase):
             "NODE_PATH": str(NPMDIR / "node_modules"),
             "E2E_BASE": f"http://127.0.0.1:{PORT}",
             "E2E_TOKEN": "70000:E2ETEST",
-            "E2E_CHAT": "603522950",
+            "E2E_CHAT": "700111222",
         }
         proc = subprocess.run(
             ["node", str(ROOT / "tests" / "e2e_miniapp.cjs")],

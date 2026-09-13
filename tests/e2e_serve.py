@@ -19,7 +19,7 @@ from bot import db  # noqa: E402
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8891
 TOKEN = "70000:E2ETEST"  # фейковый, подпись воспроизводит e2e-скрипт
-CHAT = 603522950
+CHAT = 700111222
 
 bconfig.TOKEN = TOKEN
 bconfig.ALLOWED_CHAT_ID = str(CHAT)

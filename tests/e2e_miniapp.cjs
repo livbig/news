@@ -8,7 +8,7 @@ const crypto = require('crypto');
 
 const BASE = process.env.E2E_BASE || 'http://127.0.0.1:8891';
 const TOKEN = process.env.E2E_TOKEN || '70000:E2ETEST';
-const CHAT = parseInt(process.env.E2E_CHAT || '603522950', 10);
+const CHAT = parseInt(process.env.E2E_CHAT || '700111222', 10);
 
 function signInitData() {
   const fields = {
