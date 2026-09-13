@@ -3,6 +3,38 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — ИНЦИДЕНТ и переезд на livbig/news (публичный снапшот)
+
+- **ИНЦИДЕНТ**: push М1 ушёл в github.com/kirpich-team/news — это ДРУГОЙ проект
+  пользователя; разрешение на публикацию туда не давалось. По указанию пользователя
+  репо будет удалено им вручную (delete_repo-скоуп не запрашивали; device-flow
+  авторизации дважды срывался: в браузере был активен livbig). Локальная история
+  не пострадала, секретов в пушах не было (аудит ниже).
+- **Новый ремоут**: https://github.com/livbig/news (ПУБЛИЧНЫЙ — у livbig GitHub
+  Trade controls блокирует создание приватных репо; пользователь подтвердил в вебе).
+- **Схема публикации (двухветочная)**: локальная `main` — полная приватная история
+  (LOG/AGENTS/docs/feeds и т.п.) — НИКУДА не пушится; ветка `public` — orphan-
+  снапшот ТОЛЬКО безопасных путей (bot/, pipeline/, tests/ без TESTPLAN.md,
+  requirements.txt, .github/, .gitignore, .env.example) одним коммитом без истории,
+  пушится как `public:main` в livbig/news. Обновление публикации: на main сделать
+  коммиты → `git checkout public` → `git rm -rf --cached . -q` →
+  `git add bot pipeline tests requirements.txt .github .gitignore .env.example` →
+  `git rm --cached -q tests/TESTPLAN.md` → commit → `git push origin public:main` →
+  `git checkout main`. НЕ пушить main в origin.
+- **Аудит снапшота перед пушем**: персональные идентификаторы (chat_id 603522950,
+  @cumulativenewsbot, @Testernewsbotbot id, туннель pac-utilities, kirpich/fifth,
+  /Users/…) — только в LOG.md, в снапшот не входит; скан токен-паттернов по
+  истории и снапшоту — чисто (единственные совпадения — фейковые константы
+  12345:TESTTOKEN в тестах И8); runtime-зависимостей от исключённых файлов нет —
+  TC-45 сделал tolerant к отсутствию LOG.md (commit 97dd8e6 на main).
+- **Аккаунты gh**: залогинены livbig (активный, скоупы repo+workflow — workflow
+  добавлен device-flow) и kirpich-team (не активный). Git-креденшелы переключены
+  на gh-активный аккаунт (`gh auth setup-git`) — иначе push шёл от kirpich-team
+  из macOS keychain (403). ПУШИТЬ ТОЛЬКО ВЕТКУ public. CI livbig/news: success
+  (86/86, python 3.13).
+- Остаток М1 (CI/push) перевыполнен на новом ремоуте. Действия пользователя:
+  удалить kirpich-team/news через веб (Settings → Danger Zone); М2 — Supabase.
+
 ## 2026-09-13 — Итерация М1 (GitHub: packaging, CI, свежий клон) — ЗАВЕРШЕНА
 
 - **requirements.txt (новый)**: пины локально-проверенных версий — aiogram==3.31.0,

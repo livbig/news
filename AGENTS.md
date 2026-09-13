@@ -11,6 +11,25 @@
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.
 
+## GitHub / публикация (ВНИМАНИЕ)
+
+- Локальная `main` — полная приватная история (LOG/AGENTS/docs/feeds/TESTPLAN).
+  **НЕ пушить её никуда.** Публикация — только через ветку `public` (orphan-снапшот
+  безопасных путей: bot/, pipeline/, tests/ без TESTPLAN.md, requirements.txt,
+  .github/, .gitignore, .env.example) в https://github.com/livbig/news (ПУБЛИЧНЫЙ;
+  у livbig Trade controls запрещает приватные репо).
+- Обновить публикацию: `git checkout public` → `git rm -rf --cached . -q` →
+  `git add bot pipeline tests requirements.txt .github .gitignore .env.example` →
+  `git rm --cached -q tests/TESTPLAN.md` → commit → `git push origin public:main`
+  → `git checkout main`.
+- Аккаунты gh: livbig (активный), kirpich-team (ДРУГОЙ проект пользователя —
+  НЕ пушить сюда; репо kirpich-team/news создано по ошибке 2026-09-13, удаляется
+  пользователем). Git-креденшелы привязаны к активному gh-аккаунту
+  (`gh auth setup-git`) — при 403 «denied to kirpich-team» проверить
+  `gh auth status`.
+- Перед каждым пушем — скан снапшота на идентификаторы (chat_id, @usernames,
+  /Users/, токен-паттерны): `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
+
 ## Бот-демон (launchd, автозапуск при входе в систему)
 
 - Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`,
