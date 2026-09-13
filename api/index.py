@@ -14,7 +14,7 @@ from starlette.routing import Route
 from bot import db, scheduler
 from bot.handlers.onboarding import TIME_RE, allowed
 from bot.webapp import MAX_SLOTS, PAGE
-from bot.webauth import verify_init_data
+from bot.webauth import verify_init_data_detailed
 from api.telegram import telegram_webhook
 from bot import config
 
@@ -38,17 +38,23 @@ def _set_conn(conn):
 
 
 def _auth(request: Request):
+    """user или None; reason — стадия отказа (диагностика в 401-JSON)."""
     raw = request.headers.get("authorization", "")
     if not raw.startswith("tma "):
-        return None
-    user = verify_init_data(raw[4:].strip(), config.TOKEN)
-    if not user or not allowed(user["id"]):
-        return None
-    return user
+        return None, "no_header"
+    user, reason = verify_init_data_detailed(raw[4:].strip(), config.TOKEN)
+    if not user:
+        return None, reason
+    if not allowed(user["id"]):
+        return None, "not_allowed"
+    return user, None
 
 
-def _unauthorized():
-    return JSONResponse({"error": "требуется initData из Telegram"}, status_code=401)
+def _unauthorized(reason: str | None = None):
+    body = {"error": "требуется initData из Telegram"}
+    if reason:
+        body["detail"] = reason  # no_header/no_hash/hash_mismatch/not_allowed/…
+    return JSONResponse(body, status_code=401)
 
 
 async def _body(request: Request):
@@ -64,9 +70,9 @@ async def _page(request):
 
 
 async def _sources(request):
-    user = _auth(request)
+    user, reason = _auth(request)
     if user is None:
-        return _unauthorized()
+        return _unauthorized(reason)
     rows = db.list_sources(_get_conn(), user["id"])
     return JSONResponse({"sources": [
         {"id": r["id"], "title": r["title"], "kind": r["kind"], "url": r["url"],
@@ -76,9 +82,9 @@ async def _sources(request):
 
 
 async def _toggle(request):
-    user = _auth(request)
+    user, reason = _auth(request)
     if user is None:
-        return _unauthorized()
+        return _unauthorized(reason)
     data = await _body(request)
     if data is None:
         return JSONResponse({"error": "нужен JSON-объект"}, status_code=400)
@@ -91,9 +97,9 @@ async def _toggle(request):
 
 
 async def _delete(request):
-    user = _auth(request)
+    user, reason = _auth(request)
     if user is None:
-        return _unauthorized()
+        return _unauthorized(reason)
     data = await _body(request)
     if data is None:
         return JSONResponse({"error": "нужен JSON-объект"}, status_code=400)
@@ -106,9 +112,9 @@ async def _delete(request):
 
 
 async def _settings(request):
-    user = _auth(request)
+    user, reason = _auth(request)
     if user is None:
-        return _unauthorized()
+        return _unauthorized(reason)
     conn = _get_conn()
     if request.method == "GET":
         row = conn.execute(

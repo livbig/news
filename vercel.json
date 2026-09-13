@@ -5,6 +5,8 @@
       "config": { "maxDuration": 300 } }
   ],
   "routes": [
+    { "src": "/", "dest": "/index.html",
+      "headers": { "Cache-Control": "no-store" } },
     { "handle": "filesystem" },
     { "src": "/api/(.*)", "dest": "api/index.py" },
     { "src": "/(.*)", "dest": "api/index.py" }

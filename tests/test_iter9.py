@@ -94,6 +94,20 @@ class TestAuth(ApiBase):
     def test_foreign_user_rejected_when_allowed_set(self):
         self.assertEqual(self.get("/api/sources", chat=OTHER).status_code, 401)
 
+    def test_401_detail_stage(self):
+        # М3.3: 401 несёт стадию отказа — диагностика прямо в ответе API
+        self.assertEqual(client.get("/api/sources").json().get("detail"), "no_header")
+        bad = self.init[:-1] + ("0" if self.init[-1] != "0" else "1")
+        self.assertEqual(client.get("/api/sources",
+                                    headers={"Authorization": "tma " + bad}
+                                    ).json().get("detail"), "hash_mismatch")
+        self.assertEqual(client.get("/api/sources",
+                                    headers={"Authorization": "tma " + sign_init_data(
+                                        CHAT, token="9:OTHER")}).json().get("detail"),
+                         "hash_mismatch")
+        self.assertEqual(self.get("/api/sources", chat=OTHER).json().get("detail"),
+                         "not_allowed")
+
 
 class TestSourcesApi(ApiBase):
     def test_list_seeded(self):

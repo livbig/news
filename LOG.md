@@ -3,6 +3,40 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-13 — Итерация М3.3 (debug миниаппа: диагностика 401, e2e в Chromium, no-store)
+
+- **Контекст**: после М3.1/М3.2 юзер всё ещё видит fallback. Диагностика live:
+  getChatMenuButton обоих ботов = default (web_app-кнопки НЕТ — панель
+  открывается через inline-кнопку старого сообщения, URL вшит при отправке);
+  Mac-агент стартовал 20:23 local — ДО правок .env (публичный URL, DEV-токен),
+  т.е. его webapp.URL устарел и setup_menu_button выставил default; у дев-бота
+  вебхук на мёртвый preview (500). Главные подозреваемые: юзер открывает панель
+  кнопкой ДЕВ-бота (initData подписан DEV-токеном → прод с MAIN-токеном → 401
+  всегда) и/или WebView-кэш старой страницы без SDK. Для разделения гипотез
+  инструментировали клиент и сервер.
+- **Диф**:
+  - `bot/webauth.py` — `verify_init_data_detailed` → (user, reason): no_fields/
+    no_hash/hash_mismatch/bad_user_json/no_user_field; verify_init_data — обёртка.
+  - `api/index.py` + `bot/webapp.py` — `_auth` возвращает (user, reason), 401-JSON
+    содержит `detail` (+ no_header/not_allowed на уровне API).
+  - Страница (обе копии): fallback-текст дополняется `[диагностика: sdk=…,
+    initData=N симв., причина: …]` — скриншот юзера = точный диагноз.
+  - `vercel.json`: `/` → Cache-Control no-store (убивает класс багов кэша).
+  - **E2E в реальном Chromium** (Playwright 1.62 = ревизия локального кэша):
+    `tests/e2e_serve.py` (stdlib-мост ThreadingHTTPServer→TestClient, seeded
+    :memory:, фейк-токен 70000:E2ETEST), `tests/e2e_miniapp.cjs` (стаб
+    telegram-web-app.js с подписанным initData — подпись «как Telegram»:
+    encoded-строка, hash по DECODED; сценарии A1–A5: источники/toggle/persist/
+    слоты; B1: пустой initData → fallback с диагностикой), `tests/test_e2e.py`
+    (оркестратор; skip без node/chromium — CI не растёт). Прогон: 6/6 PASS.
+  - test_iter9: тест 401-detail по стадиям.
+- **Верификация**: sqlite 124/124, PG 124/124.
+- **Живая часть (после деплоя)**: page+no-store+detail проверены curl'ом;
+  MAIN-боту выставлена меню-кнопка «Новости» → `https://news-livbig.vercel.app/?v=3`
+  (один вызов Bot API — без kickstart агента: рестарт сейчас подхватил бы
+  TELEGRAM_TOKEN_DEV из .env и агент стал бы дев-ботом; landmine задокументирован
+  для М4.1/М6). ?v=3 — новый cache-key, заодно сброс WebView-кэша.
+
 ## 2026-09-13 — Итерация М3.2 (второй корень «серого текста»: verify_init_data подписывал encoded-пары)
 
 - **Симптом после М3.1**: миниапп по-прежнему показывает fallback — API отдаёт 401

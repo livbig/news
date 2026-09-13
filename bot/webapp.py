@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, db, scheduler
 from .handlers.onboarding import TIME_RE, allowed
-from .webauth import verify_init_data  # общий модуль: локальный сервер и Vercel (М3)
+from .webauth import verify_init_data_detailed  # общий модуль: локальный сервер и Vercel (М3)
 
 log = logging.getLogger("bot.webapp")
 
@@ -47,7 +47,12 @@ async function api(p, body) {
   const r = await fetch(p, {method: body ? 'POST' : 'GET', headers: H(),
                             body: body ? JSON.stringify(body) : undefined});
   if (r.status === 401) {
-    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню бота.';
+    let d = '';
+    try { d = (await r.json()).detail || ''; } catch (e) {}
+    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню бота.' +
+      ' [диагностика: sdk=' + (window.Telegram ? 'да' : 'нет') +
+      ', initData=' + (tg ? tg.initData.length : 0) + ' симв.' +
+      (d ? ', причина: ' + d : '') + ']';
     throw new Error('unauthorized');
   }
   if (!r.ok) throw new Error(await r.text());
@@ -103,17 +108,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _unauthorized(self):
-        self._send(401, {"error": "требуется initData из Telegram"})
+    def _unauthorized(self, reason=None):
+        body = {"error": "требуется initData из Telegram"}
+        if reason:
+            body["detail"] = reason
+        self._send(401, body)
 
     def _auth(self):
         raw = (self.headers.get("Authorization") or "")
         if not raw.startswith("tma "):
-            return None
-        user = verify_init_data(raw[4:].strip(), config.TOKEN)
-        if not user or not allowed(user["id"]):
-            return None
-        return user
+            return None, "no_header"
+        user, reason = verify_init_data_detailed(raw[4:].strip(), config.TOKEN)
+        if not user:
+            return None, reason
+        if not allowed(user["id"]):
+            return None, "not_allowed"
+        return user, None
 
     def _body(self):
         try:
@@ -129,9 +139,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/":
             return self._send(200, html=PAGE)
-        user = self._auth()
+        user, reason = self._auth()
         if user is None:
-            return self._unauthorized()
+            return self._unauthorized(reason)
         chat_id = user["id"]
         with _lock:
             if path == "/api/sources":
@@ -151,9 +161,9 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST ---------------------------------------------------------------
 
     def do_POST(self):
-        user = self._auth()
+        user, reason = self._auth()
         if user is None:
-            return self._unauthorized()
+            return self._unauthorized(reason)
         chat_id = user["id"]
         data = self._body()
         if data is None:
