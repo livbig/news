@@ -13,17 +13,28 @@
 
 ## Бот-демон (launchd, автозапуск при входе в систему)
 
-- Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`.
+- Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`,
+  с 2026-09-13 запускает нового бота: `python3 -m bot` (миграция И7, решение D24).
   Один потребитель getUpdates: перед ручным запуском бота останови агент (иначе 409).
-- Сводки двухфазно: подготовка (сбор + LLM, таймаут 15 мин + ретрай) в 08:50/20:50,
-  отправка ровно в 09:00/21:00 МСК; догоняюще после сна Mac.
+- Сводки per-user, двухфазно: подготовка (сбор + LLM) за 10 мин до слота,
+  отправка ровно в слот; расписание каждого чата — в `/settings` (bot.db,
+  `users.send_times`); после сна Mac — одна догоняющая сводка за всё окно.
+- Диалог: свободный текст боту (без команды) — вопрос к LLM с контекстом ленты
+  и историей чата (bot.db, chat_history).
 - Остановить агента (для отладки): `launchctl bootout gui/501/com.fifth.newsbot`
-- Ручной прогон с живым выводом: `python3 -m pipeline bot`
+- Ручной прогон с живым выводом: `python3 -m bot`
 - Запустить агент снова: `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`
 - Перезапуск после правок кода: `launchctl kickstart -k gui/501/com.fifth.newsbot`
 - Статус: `launchctl print gui/501/com.fifth.newsbot | grep state`
-- Логи: `logs/run.log` (основной), `logs/launchd.err` (ранние крэши). Код правится прямо
-  в `pipeline/` — агент подхватывает изменения после перезапуска (kickstart).
+- Логи: `logs/run.log` (основной, файловый хендлер бота), `logs/launchd.out`
+  (дубль stdout), `logs/launchd.err` (ранние крэши). Код правится прямо в `bot/` —
+  агент подхватывает изменения после перезапуска (kickstart).
+- Откат на старого бота (rollback И7): в plist `ProgramArguments` вернуть
+  `/opt/homebrew/bin/python3`, `-m`, `pipeline`, `bot` → `bootout` + `bootstrap`.
+  Код `pipeline/` сохранён (CLI run/digest/check живы); `news.db` и `bot.db`
+  раздельны — откат ничего не теряет.
+- Ручные CLI-прогоны pipeline (run/digest) — только при остановленном агенте
+  (SQLite-блокировки, R5).
 
 ## Конфигурация
 

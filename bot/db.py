@@ -279,3 +279,32 @@ def scheduled_users(conn) -> list[sqlite3.Row]:
         "SELECT chat_id, send_times, last_sent_at, onboarded_at"
         " FROM users WHERE onboarded_at IS NOT NULL"
     ).fetchall()
+
+
+# --- И7: диалоговый режим (R11, D27) -------------------------------------------
+
+def add_chat_message(conn, chat_id, role, text) -> None:
+    conn.execute(
+        "INSERT INTO chat_history (chat_id, role, text) VALUES (?, ?, ?)",
+        (chat_id, role, text),
+    )
+    conn.commit()
+
+
+def chat_history(conn, chat_id, limit=12) -> list[dict]:
+    """Последние сообщения диалога этого чата (D27: chat_id), старыми вперёд."""
+    rows = conn.execute(
+        "SELECT role, text FROM chat_history WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+        (chat_id, limit),
+    ).fetchall()
+    return [{"role": r["role"], "content": r["text"]} for r in reversed(rows)]
+
+
+def news_context(conn, chat_id, limit=120) -> str:
+    """Контекст ленты чата для диалога: последние заголовки со ссылками."""
+    rows = conn.execute(
+        "SELECT i.title, i.url FROM items i JOIN sources s ON s.id = i.source_id"
+        " WHERE s.chat_id=? ORDER BY i.id DESC LIMIT ?",
+        (chat_id, limit),
+    ).fetchall()
+    return "\n".join(f"{r['title']} — {r['url']}" for r in rows)

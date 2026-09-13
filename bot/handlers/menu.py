@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from .. import collect, digest, keyboards, tgsend
+from .. import collect, digest, keyboards, llm, tgsend
 from . import onboarding
 from .onboarding import _drop, allowed
 
@@ -51,6 +51,25 @@ async def cq_menu_main(cb: CallbackQuery, state: FSMContext):
         return await cb.answer()
     await cb.message.edit_text("Главное меню.", reply_markup=keyboards.menu_kb(onboarded=True))
     await cb.answer()
+
+
+# --- И7: диалоговый режим (R11, D27) ---------------------------------------------
+# Свободный текст без команды и вне FSM-состояний: роутер меню подключён
+# последним, все текстовые хендлеры выше сидят на StateFilter.
+
+async def run_chat(bot, chat_id: int, text: str) -> None:
+    async with tgsend.with_typing(bot, chat_id):  # LLM думает до 180 с (FR-15)
+        answer = await asyncio.to_thread(llm.ask, onboarding.conn, chat_id, text)
+    if answer:
+        await asyncio.to_thread(tgsend.send_chat, answer, chat_id)
+
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def ms_chat(message: Message, state: FSMContext):
+    await _drop(state)
+    if not allowed(message.chat.id):
+        return
+    await run_chat(message.bot, message.chat.id, message.text.strip())
 
 
 # последний обработчик всех колбэков: устаревшие кнопки не должны «висеть»

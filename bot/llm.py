@@ -1,11 +1,13 @@
 """LLM-сводка бота (И5): промпт §1.6 (ссылки, ассистент, top-N, русский)
-на боевом стриминговом _call (R9); параметры 900×2 + mock-фолбэк (D25)."""
+на боевом стриминговом _call (R9); параметры 900×2 + mock-фолбэк (D25).
+Диалог (И7): pipeline.llm.chat + CHAT_SYSTEM_PROMPT переносятся как есть (R11),
+история — per-chat через chat_history.chat_id (D27)."""
 import logging
 import time
 
 import httpx
 from pipeline import config as pconfig
-from pipeline.llm import _call, mock_summary  # R9: боевой клиент GLM
+from pipeline.llm import _call, chat, mock_summary  # R9/R11: боевой клиент GLM
 
 log = logging.getLogger("bot.llm")
 
@@ -71,3 +73,34 @@ def summarize(items_text: str) -> str:
         if attempt < ATTEMPTS:
             _sleep(RETRY_PAUSE)
     return mock_summary(items_text, reason=f"LLM недоступна после 2 попыток: {last_exc}")
+
+
+# --- И7: диалоговый режим (R11, D27) --------------------------------------------
+
+CHAT_HISTORY_LIMIT = 12   # как в проде (pipeline/bot.py)
+CHAT_CONTEXT_LIMIT = 120  # последних заголовков ленты в контексте
+
+
+def ask(conn, chat_id, text: str) -> str | None:
+    """Вопрос владельца: контекст = лента чата + история диалога чата.
+    Возвращает текст ответа или None-подобную подсказку при сбое; вся
+    диагностика — в лог (как в проде). Без ключа — подсказка без похода в API."""
+    if not pconfig.LLM_API_KEY:
+        log.info("chat chat=%s: LLM_API_KEY не задан — диалог недоступен", chat_id)
+        return "LLM-диалог недоступен: не задан LLM_API_KEY."
+    from . import db
+
+    db.add_chat_message(conn, chat_id, "user", text)
+    history = db.chat_history(conn, chat_id, CHAT_HISTORY_LIMIT)
+    context = db.news_context(conn, chat_id, CHAT_CONTEXT_LIMIT)
+    try:
+        answer = chat(history, context)
+    except Exception as exc:
+        log.error("chat chat=%s: ошибка LLM в диалоге: %s", chat_id, exc)
+        return f"LLM недоступен: {exc}"
+    if not answer.strip():
+        log.warning("chat chat=%s: пустой ответ LLM", chat_id)
+        return "LLM вернул пустой ответ — попробуйте переспросить."
+    log.info("chat chat=%s: ответ %d симв.", chat_id, len(answer))
+    db.add_chat_message(conn, chat_id, "assistant", answer)
+    return answer
