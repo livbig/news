@@ -3,7 +3,7 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
-## 2026-09-13 — Итерация М1 (GitHub: packaging, CI, свежий клон) — осталось auth+push
+## 2026-09-13 — Итерация М1 (GitHub: packaging, CI, свежий клон) — ЗАВЕРШЕНА
 
 - **requirements.txt (новый)**: пины локально-проверенных версий — aiogram==3.31.0,
   httpx==0.28.1, feedparser==6.0.14, beautifulsoup4==4.15.0 (список выведен grep'ом
@@ -32,19 +32,24 @@
   `git log --all -- .env` пуст, в трекаемых нет *.db/logs/digests/секретов.
   Коммиты: dbd8796 (герметичность iter8/8b), 2b7db7b (migr-1 packaging),
   b932da8 (герметичность TC-37/45).
-- **gh CLI установлен** (brew, 2.100.0) — не был в списке «нужно от пользователя»
-  частично снят: остался только `gh auth login` (интерактивный).
+- **gh CLI установлен** (brew, 2.100.0); `gh auth status` → уже аутентифицирован
+  (kirpich-team, скоупы repo+workflow) — «действия пользователя» из плана М1
+  оказались выполнены.
+- **Ремоут создан и запушен**: `gh repo create news --private --source . --push`
+  → https://github.com/kirpich-team/news (вся история iter1…migr-1).
+- **CI зелёный**: первый прогон push — tests ✓ 1m23s (python 3.13, 86/86).
+  Аннотация про Node 20 deprecation в actions/checkout@v4, setup-python@v5 —
+  не блокер (форсится на Node 24); обновить пины можно отдельно.
 - **Прод-наблюдение**: cloudflared quick-туннель мёртв (домен
   pac-utilities-scheme-reduction.trycloudflare.com не резолвится) → меню-кнопка
   бота ведёт в никуда до М3 (инлайн-кнопка — fallback-текстом, FR-17, бот жив).
   Лечится М3 (стабильный vercel-домен) или рестартом туннеля + новый URL в .env.
-- **Требуются действия пользователя (завершение М1)**: `gh auth login` → следующая
-  сессия: `gh repo create news --private --source . --push` (или вручную в вебе) →
-  проверка зелёного CI. Дальше М2 (Supabase) — создать проект, выдать
-  SUPABASE_DB_URL (transaction pooler :6543); решить про OrbStack для локальных
-  PG-тестов.
+- **Действия пользователя до М2**: создать проект Supabase (регион eu-central),
+  выдать `SUPABASE_DB_URL` (transaction pooler, порт 6543) в `.env`; решить про
+  OrbStack для локальных PG-тестов (`brew install --cask orbstack`) — или явно
+  отказаться (PG-тесты только в CI).
 - Дальше: М2 — port db.py/webapp.py на psycopg3 (~40 SQL-правок),
-  scripts/migrate_sqlite_to_pg.py, свежий_db() в тестах, прогон против Postgres.
+  scripts/migrate_sqlite_to_pg.py, fresh_db() в тестах, прогон против Postgres.
 
 ## 2026-09-13 — Итерация 8б (Mini App с телефона: публичный https-URL, меню-кнопка)
 
