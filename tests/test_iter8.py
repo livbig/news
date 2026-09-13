@@ -66,9 +66,11 @@ def setUpModule():
     global BASE, DB, _SAVED
     from bot import config as bconfig, db, handlers, webapp
 
-    _SAVED = (bconfig.TOKEN, bconfig.ALLOWED_CHAT_ID)
+    # ключи/чаты/публичный URL .env не утекают в тесты (NFR-05)
+    _SAVED = (bconfig.TOKEN, bconfig.ALLOWED_CHAT_ID, bconfig.WEBAPP_PUBLIC_URL)
     bconfig.TOKEN = TOKEN
     bconfig.ALLOWED_CHAT_ID = ""
+    bconfig.WEBAPP_PUBLIC_URL = ""
     DB = db.connect(":memory:")
     handlers.init(DB)
     webapp.start(DB, port=0)
@@ -80,7 +82,7 @@ def tearDownModule():
     from bot import config as bconfig, webapp
 
     webapp.stop()
-    bconfig.TOKEN, bconfig.ALLOWED_CHAT_ID = _SAVED
+    bconfig.TOKEN, bconfig.ALLOWED_CHAT_ID, bconfig.WEBAPP_PUBLIC_URL = _SAVED
 
 
 _UID = itertools.count(1)

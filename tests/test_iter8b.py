@@ -47,6 +47,8 @@ def setUpModule():
               bconfig.WEBAPP_PUBLIC_URL, bconfig.WEBAPP_BIND)
     bconfig.TOKEN = TOKEN
     bconfig.ALLOWED_CHAT_ID = ""
+    bconfig.WEBAPP_PUBLIC_URL = ""  # ambient .env (мёртвый туннель) не влияет
+    bconfig.WEBAPP_BIND = "127.0.0.1"
     DB = db.connect(":memory:")
     handlers.init(DB)
     webapp.start(DB, port=0)
