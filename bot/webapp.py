@@ -56,7 +56,7 @@ async function api(p, body) {
         body: JSON.stringify({init: tg ? tg.initData : ''})});
       const j = await rr.json();
       diag = ' user=' + (j.user_id || '?') + ' подпись=' +
-             (j.alg_decoded_ok ? 'OK' : (j.alg_raw_ok ? 'OK(legacy)' : 'НЕ совпала с токеном этого бота — кнопка от ДРУГОГО бота?'));
+             (j.matched ? 'OK(' + j.matched + ')' : 'НЕ совпала (проверено 8 вариантов — запрос зафиксирован)');
     } catch (e) {}
     document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню основного бота (не дев-бота).' +
       ' [диагностика: sdk=' + (window.Telegram ? 'да' : 'нет') +
@@ -170,12 +170,21 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST ---------------------------------------------------------------
 
     def do_POST(self):
-        if self.path == "/api/diag":  # диагностика без авторизации (М3.4)
+        if self.path == "/api/diag":  # диагностика без авторизации (М3.4/М3.5)
             data = self._body()
             if data is None:
                 return self._send(400, {"error": "нужен JSON-объект"})
-            return self._send(200, diagnose_init_data(
-                str(data.get("init") or ""), config.TOKEN))
+            init = str(data.get("init") or "")
+            diag = diagnose_init_data(init, config.TOKEN)
+            try:
+                _conn.execute("INSERT INTO debug_auth_log (at, init, diag) "
+                              "VALUES (%s,%s,%s)",
+                              (db.now_iso(), init[:8192],
+                               json.dumps(diag, ensure_ascii=False)))
+                _conn.commit()
+            except Exception:
+                pass
+            return self._send(200, diag)
         user, reason = self._auth()
         if user is None:
             return self._unauthorized(reason)

@@ -4,6 +4,7 @@
 GET / отдаёт ту же страницу (bot.webapp.PAGE); на Vercel «/» отдаёт CDN
 (public/index.html — тот же текст), функция остаётся фолбэком и нужна
 тестам. Env на Vercel: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SUPABASE_DB_URL."""
+import json
 import threading
 
 from starlette.applications import Starlette
@@ -70,12 +71,23 @@ async def _page(request):
 
 
 async def _diag(request):
-    """Диагностика initData без авторизации (М3.4): страница на 401 шлёт сюда
-    initData — ответ говорит, каким ключом/алгоритмом оно подписано."""
+    """Диагностика initData без авторизации (М3.4/М3.5): страница на 401 шлёт
+    сюда initData — ответ говорит, каким ключом/алгоритмом оно подписано.
+    Каждая проба пишется в debug_auth_log (захват реального initData для
+    локального подбора алгоритма)."""
     data = await _body(request)
     if data is None:
         return JSONResponse({"error": "нужен JSON-объект"}, status_code=400)
-    return JSONResponse(diagnose_init_data(str(data.get("init") or ""), config.TOKEN))
+    init = str(data.get("init") or "")
+    diag = diagnose_init_data(init, config.TOKEN)
+    try:
+        conn = _get_conn()
+        conn.execute("INSERT INTO debug_auth_log (at, init, diag) VALUES (%s,%s,%s)",
+                     (db.now_iso(), init[:8192], json.dumps(diag, ensure_ascii=False)))
+        conn.commit()
+    except Exception:  # лог диагностики не должен ломать диагностику
+        pass
+    return JSONResponse(diag)
 
 
 async def _sources(request):

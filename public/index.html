@@ -34,7 +34,7 @@ async function api(p, body) {
         body: JSON.stringify({init: tg ? tg.initData : ''})});
       const j = await rr.json();
       diag = ' user=' + (j.user_id || '?') + ' подпись=' +
-             (j.alg_decoded_ok ? 'OK' : (j.alg_raw_ok ? 'OK(legacy)' : 'НЕ совпала с токеном этого бота — кнопка от ДРУГОГО бота?'));
+             (j.matched ? 'OK(' + j.matched + ')' : 'НЕ совпала (проверено 8 вариантов — запрос зафиксирован)');
     } catch (e) {}
     document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню основного бота (не дев-бота).' +
       ' [диагностика: sdk=' + (window.Telegram ? 'да' : 'нет') +

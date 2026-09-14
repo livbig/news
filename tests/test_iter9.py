@@ -36,7 +36,8 @@ client = TestClient(api_index.app)
 
 class ApiBase(unittest.TestCase):
     def setUp(self):
-        for t in ("sources", "items", "digest_items", "digests", "chat_history"):
+        for t in ("sources", "items", "digest_items", "digests", "chat_history",
+                  "debug_auth_log"):
             CONN.execute(f"DELETE FROM {t}")
         CONN.commit()
         for name, value in (("TOKEN", TOKEN), ("ALLOWED_CHAT_ID", str(CHAT))):
@@ -175,21 +176,34 @@ class TestSettingsApi(ApiBase):
 
 
 class TestDiagApi(ApiBase):
-    """М3.4: /api/diag — вердикт по initData без авторизации."""
+    """М3.4/М3.5: /api/diag — вердикт по initData без авторизации + захват в БД."""
 
     @staticmethod
-    def legacy_raw_signed(chat):
+    def sign_variant(chat, secret_mode="hmac", check_mode="decoded_all"):
         import hashlib
         import hmac as hmac_mod
         import urllib.parse as up
-        fields = {"auth_date": "1", "query_id": "AAFx",
+        fields = {"auth_date": "1", "query_id": "AAFx", "signature": "AAIBsig",
                   "user": json.dumps({"id": chat, "first_name": "Тест"},
                                      separators=(",", ":"), ensure_ascii=False)}
         encoded = "&".join(f"{k}={up.quote(v, safe='')}" for k, v in fields.items())
-        secret = hmac_mod.new(TOKEN.encode(), b"WebAppData", hashlib.sha256).digest()
-        digest = hmac_mod.new(secret, "\n".join(sorted(encoded.split("&"))).encode(),
-                              hashlib.sha256).hexdigest()
-        return f"{encoded}&hash={digest}"
+        if check_mode.startswith("decoded"):
+            f = dict(fields)
+            if check_mode.endswith("nosig"):
+                f.pop("signature")
+            check = "\n".join(f"{k}={v}" for k, v in sorted(f.items()))
+        else:
+            ps = [f"{k}={up.quote(v, safe='')}" for k, v in fields.items()]
+            if check_mode.endswith("nosig"):
+                ps = [p for p in ps if not p.startswith("signature=")]
+            check = "\n".join(sorted(ps))
+        secret = (hmac_mod.new(TOKEN.encode(), b"WebAppData", hashlib.sha256).digest()
+                  if secret_mode == "hmac" else hashlib.sha256(TOKEN.encode()).digest())
+        return f"{encoded}&hash={hmac_mod.new(secret, check.encode(), hashlib.sha256).hexdigest()}"
+
+    @staticmethod
+    def legacy_raw_signed(chat):
+        return TestDiagApi.sign_variant(chat, "hmac", "raw_all")
 
     def test_decoded_signature(self):
         body = client.post("/api/diag", json={"init": self.init}).json()
@@ -197,19 +211,31 @@ class TestDiagApi(ApiBase):
         self.assertFalse(body["alg_raw_ok"])
         self.assertEqual(body["user_id"], CHAT)
         self.assertIn("auth_date", body["fields"])
+        self.assertEqual(body["matched"], "hmac_decoded_all")
 
-    def test_legacy_raw_signature(self):
-        body = client.post("/api/diag",
-                           json={"init": self.legacy_raw_signed(CHAT)}).json()
-        self.assertTrue(body["alg_raw_ok"])
-        self.assertFalse(body["alg_decoded_ok"])
+    def test_matrix_variants_detected(self):
+        cases = [("hmac", "raw_all", "hmac_raw_all"),
+                 ("hmac", "decoded_nosig", "hmac_decoded_nosig"),
+                 ("sha", "decoded_all", "sha_decoded_all"),
+                 ("sha", "raw_nosig", "sha_raw_nosig")]
+        for secret_mode, check_mode, matched in cases:
+            body = client.post("/api/diag", json={
+                "init": self.sign_variant(CHAT, secret_mode, check_mode)}).json()
+            self.assertEqual(body["matched"], matched, (secret_mode, check_mode))
 
-    def test_foreign_token_all_false(self):
+    def test_foreign_token_no_match(self):
         body = client.post("/api/diag", json={
             "init": sign_init_data(CHAT, token="9:OTHER")}).json()
-        self.assertFalse(body["alg_decoded_ok"])
-        self.assertFalse(body["alg_raw_ok"])
+        self.assertIsNone(body["matched"])
         self.assertEqual(body["user_id"], CHAT)  # кто открыл — видно всё равно
+
+    def test_probe_logged_to_db(self):
+        client.post("/api/diag", json={"init": self.init})
+        rows = CONN.execute(
+            "SELECT init, diag FROM debug_auth_log ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertIn("query_id", rows[0][0])
+        self.assertIn("hmac_decoded_all", rows[0][1])
 
     def test_bad_body(self):
         self.assertEqual(client.post(
