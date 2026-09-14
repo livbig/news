@@ -34,11 +34,30 @@ def build_dispatcher(storage=None):
     return _dispatcher
 
 
+async def setup_commands(bot) -> None:
+    """Команды в меню-кнопке Telegram (setMyCommands; запрос юзера 2026-09-14:
+    значок «/» со списком команд). Сеть/Bot API не должны мешать поллингу."""
+    from aiogram.types import BotCommand
+
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Опрос заново и главное меню"),
+            BotCommand(command="sources", description="Мои источники"),
+            BotCommand(command="settings", description="Расписание сводок"),
+            BotCommand(command="digest", description="Предпросмотр сводки"),
+            BotCommand(command="stats", description="Статистика источников"),
+        ])
+        log.info("menu commands: 5 команд зарегистрированы")
+    except Exception as exc:
+        log.warning("setMyCommands не удался: %s", exc)
+
+
 async def run():
     bot = Bot(config.TOKEN)
     dp = build_dispatcher()
     sweeper = asyncio.create_task(fsm_sweeper(bot, dp.storage))
     slots = asyncio.create_task(slots_loop(onboarding.conn))
+    await setup_commands(bot)
     log.info("Бот запускается (long polling)")
     try:
         await dp.start_polling(bot)

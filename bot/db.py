@@ -495,6 +495,21 @@ def scheduled_users(conn) -> list:
     ).fetchall()
 
 
+def source_stats(conn, chat_id, hours=24) -> list:
+    """Счётчики элементов per источник (FR-20): собрано за последние
+    `hours` часов и всего. fetched_at — UTC ISO, сравнение лексикографическое
+    (тот же приём, что в cleanup_processed_updates/minus_iso)."""
+    return conn.execute(
+        "SELECT s.title, s.kind,"
+        " (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id"
+        "   AND i.fetched_at >= %s) AS fresh,"
+        " (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) AS total"
+        " FROM sources s WHERE s.chat_id=%s"
+        " ORDER BY fresh DESC, total DESC, s.title",
+        (minus_iso(now_iso(), hours), chat_id),
+    ).fetchall()
+
+
 # --- И7: диалоговый режим (R11, D27) -------------------------------------------
 
 def add_chat_message(conn, chat_id, role, text) -> None:

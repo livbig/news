@@ -3,6 +3,7 @@
 Диалог (И7): pipeline.llm.chat + CHAT_SYSTEM_PROMPT переносятся как есть (R11),
 история — per-chat через chat_history.chat_id (D27)."""
 import logging
+import re
 import time
 
 import httpx
@@ -42,6 +43,14 @@ RETRY_PAUSE = 30.0  # D25: пауза между попытками
 
 _sleep = time.sleep  # заменяется в тестах (TC-31)
 
+_BR = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
+def _normalize(text: str) -> str:
+    """LLM любит <br> — в Telegram-HTML такого тега нет, он экранируется
+    и виден как текст (инцидент 2026-09-14). Заменяем на перенос строки."""
+    return _BR.sub("\n", text)
+
 
 def summarize(items_text: str) -> str:
     """Сводка по дельте (§1.6). Без ключа — mock (NFR-05); 5xx/таймауты/
@@ -56,7 +65,7 @@ def summarize(items_text: str) -> str:
         try:
             result = _call(SYSTEM_PROMPT, messages, MAX_TOKENS, read_timeout=READ_TIMEOUT)
             if result.strip():
-                return result
+                return _normalize(result)
             last_exc = RuntimeError("пустой ответ (только thinking-блоки?)")
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
@@ -101,6 +110,7 @@ def ask(conn, chat_id, text: str) -> str | None:
     if not answer.strip():
         log.warning("chat chat=%s: пустой ответ LLM", chat_id)
         return "LLM вернул пустой ответ — попробуйте переспросить."
+    answer = _normalize(answer)
     log.info("chat chat=%s: ответ %d симв.", chat_id, len(answer))
     db.add_chat_message(conn, chat_id, "assistant", answer)
     return answer
