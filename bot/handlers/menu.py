@@ -3,13 +3,11 @@ import asyncio
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                           MenuButtonDefault, MenuButtonWebApp, Message, WebAppInfo)
+from aiogram.types import CallbackQuery, Message
 
-from .. import collect, digest, keyboards, llm, tgsend, webapp
+from .. import collect, digest, keyboards, llm, tgsend
 from . import onboarding
 from .onboarding import _drop, allowed
 
@@ -53,50 +51,6 @@ async def cq_menu_main(cb: CallbackQuery, state: FSMContext):
         return await cb.answer()
     await cb.message.edit_text("Главное меню.", reply_markup=keyboards.menu_kb(onboarded=True))
     await cb.answer()
-
-
-# --- И8: Mini App (FR-17) — кнопка с fallback в бот-интерфейс ---------------------
-
-@router.callback_query(F.data == "menu:webapp")
-async def cq_webapp(cb: CallbackQuery, state: FSMContext):
-    if not allowed(cb.message.chat.id):
-        return await cb.answer()
-    await _drop(state)
-    if not webapp.running() or not webapp.URL:
-        await cb.answer("Веб-панель недоступна — управление в боте", show_alert=True)
-        await cb.message.edit_text("Главное меню.", reply_markup=keyboards.menu_kb(onboarded=True))
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Открыть веб-панель", web_app=WebAppInfo(url=webapp.URL))
-    ]])
-    try:
-        await cb.message.answer("Веб-панель: источники и расписание.", reply_markup=kb)
-    except TelegramBadRequest:
-        # web_app-кнопка требует https; без публичного URL (локальный путь) — текстом
-        await cb.message.answer(
-            f"Веб-панель: {webapp.URL} — " +
-            ("откройте в браузере на этом Mac (авторизация — из Telegram Desktop)."
-             if webapp.URL.startswith("http://") else
-             "сервис недоступен — управление в боте."))
-    await cb.answer()
-
-
-# --- И8b: меню-кнопка Telegram → Mini App (FR-17: «открывается из меню») ----------
-
-async def setup_menu_button(bot) -> None:
-    """Публичный https-URL задан → меню-кнопка бота открывает Mini App (с телефона,
-    в любом чате с ботом); нет — сброс на стандартное меню команд (без мёртвой
-    кнопки от прошлого URL)."""
-    url = webapp.public_url() if webapp.running() else None
-    try:
-        if url:
-            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
-                text="Новости", web_app=WebAppInfo(url=url)))
-        else:
-            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
-        log.info("menu button: %s", url or "стандартное меню команд")
-    except Exception as exc:  # сеть/Bot API — поллинг важнее кнопки
-        log.warning("setChatMenuButton не удался: %s", exc)
 
 
 # --- И7: диалоговый режим (R11, D27) ---------------------------------------------

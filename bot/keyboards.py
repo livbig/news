@@ -92,7 +92,6 @@ def menu_kb(onboarded: bool) -> InlineKeyboardMarkup:
         rows.append(
             [InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")]
         )
-        rows.append([InlineKeyboardButton(text="Веб-панель", callback_data="menu:webapp")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

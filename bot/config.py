@@ -24,21 +24,8 @@ REDDIT_RSS_TEMPLATE = os.environ.get(
     "BOT_REDDIT_RSS_TEMPLATE", "https://www.reddit.com/r/{name}/new/.rss"
 )
 
-# И8: Mini App (FR-17) — локальный веб-сервер на 127.0.0.1
-WEBAPP_PORT = int(os.environ.get("BOT_WEBAPP_PORT", "8087"))
-# И8b: доступ с телефона — публичный https-URL, ведущий на WEBAPP_PORT
-# (туннель cloudflared/ngrok или свой хостинг с reverse proxy); задан → он же
-# в web_app-кнопках и меню-кнопке бота. Не-https игнорируется (Bot API
-# требует https). BIND — адрес привязки сервера (0.0.0.0 — если прокси не на
-# этом Mac; по умолчанию 127.0.0.1 — туннель/прокси локально).
-WEBAPP_PUBLIC_URL = os.environ.get("BOT_WEBAPP_PUBLIC_URL", "").rstrip("/")
-WEBAPP_BIND = os.environ.get("BOT_WEBAPP_BIND", "127.0.0.1")
-
 # М2: Supabase Postgres (transaction pooler) — задан → бот работает на PG
 # вместо sqlite (BOT_DB_PATH принудительно возвращает sqlite, TC-45).
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 # М2: PG для тестов ':memory:' (локальный docker / CI service container).
 TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")
-
-# М4: секрет вебхука (setWebhook secret_token); пусто → эндпоинт отключён.
-TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
