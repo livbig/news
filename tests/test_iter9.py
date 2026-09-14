@@ -172,3 +172,46 @@ class TestSettingsApi(ApiBase):
         patcher.start()
         self.addCleanup(patcher.stop)  # без белого списка любой chat авторизован
         self.assertEqual(self.get("/api/settings", chat=9999).json(), {"times": []})
+
+
+class TestDiagApi(ApiBase):
+    """М3.4: /api/diag — вердикт по initData без авторизации."""
+
+    @staticmethod
+    def legacy_raw_signed(chat):
+        import hashlib
+        import hmac as hmac_mod
+        import urllib.parse as up
+        fields = {"auth_date": "1", "query_id": "AAFx",
+                  "user": json.dumps({"id": chat, "first_name": "Тест"},
+                                     separators=(",", ":"), ensure_ascii=False)}
+        encoded = "&".join(f"{k}={up.quote(v, safe='')}" for k, v in fields.items())
+        secret = hmac_mod.new(TOKEN.encode(), b"WebAppData", hashlib.sha256).digest()
+        digest = hmac_mod.new(secret, "\n".join(sorted(encoded.split("&"))).encode(),
+                              hashlib.sha256).hexdigest()
+        return f"{encoded}&hash={digest}"
+
+    def test_decoded_signature(self):
+        body = client.post("/api/diag", json={"init": self.init}).json()
+        self.assertTrue(body["alg_decoded_ok"])
+        self.assertFalse(body["alg_raw_ok"])
+        self.assertEqual(body["user_id"], CHAT)
+        self.assertIn("auth_date", body["fields"])
+
+    def test_legacy_raw_signature(self):
+        body = client.post("/api/diag",
+                           json={"init": self.legacy_raw_signed(CHAT)}).json()
+        self.assertTrue(body["alg_raw_ok"])
+        self.assertFalse(body["alg_decoded_ok"])
+
+    def test_foreign_token_all_false(self):
+        body = client.post("/api/diag", json={
+            "init": sign_init_data(CHAT, token="9:OTHER")}).json()
+        self.assertFalse(body["alg_decoded_ok"])
+        self.assertFalse(body["alg_raw_ok"])
+        self.assertEqual(body["user_id"], CHAT)  # кто открыл — видно всё равно
+
+    def test_bad_body(self):
+        self.assertEqual(client.post(
+            "/api/diag", content="{oops",
+            headers={"Content-Type": "application/json"}).status_code, 400)

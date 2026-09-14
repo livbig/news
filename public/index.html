@@ -27,10 +27,19 @@ async function api(p, body) {
   if (r.status === 401) {
     let d = '';
     try { d = (await r.json()).detail || ''; } catch (e) {}
-    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню бота.' +
+    let diag = '';
+    try {
+      const rr = await fetch('/api/diag', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({init: tg ? tg.initData : ''})});
+      const j = await rr.json();
+      diag = ' user=' + (j.user_id || '?') + ' подпись=' +
+             (j.alg_decoded_ok ? 'OK' : (j.alg_raw_ok ? 'OK(legacy)' : 'НЕ совпала с токеном этого бота — кнопка от ДРУГОГО бота?'));
+    } catch (e) {}
+    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню основного бота (не дев-бота).' +
       ' [диагностика: sdk=' + (window.Telegram ? 'да' : 'нет') +
       ', initData=' + (tg ? tg.initData.length : 0) + ' симв.' +
-      (d ? ', причина: ' + d : '') + ']';
+      (d ? ', причина: ' + d : '') + diag + ']';
     throw new Error('unauthorized');
   }
   if (!r.ok) throw new Error(await r.text());

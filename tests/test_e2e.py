@@ -84,7 +84,7 @@ class TestMiniAppE2E(unittest.TestCase):
                          "e2e упал:\n" + proc.stderr + proc.stdout)
         summary = json.loads(proc.stdout.strip().splitlines()[-1])
         self.assertTrue(summary["ok"], summary)
-        self.assertGreaterEqual(len(summary["results"]), 6)  # A1–A5 + B1
+        self.assertGreaterEqual(len(summary["results"]), 7)  # A1–A5 + B1 + C1
         for r in summary["results"]:
             self.assertTrue(r["ok"], r)
 

@@ -14,7 +14,7 @@ from starlette.routing import Route
 from bot import db, scheduler
 from bot.handlers.onboarding import TIME_RE, allowed
 from bot.webapp import MAX_SLOTS, PAGE
-from bot.webauth import verify_init_data_detailed
+from bot.webauth import diagnose_init_data, verify_init_data_detailed
 from api.telegram import telegram_webhook
 from bot import config
 
@@ -67,6 +67,15 @@ async def _body(request: Request):
 
 async def _page(request):
     return HTMLResponse(PAGE)
+
+
+async def _diag(request):
+    """Диагностика initData без авторизации (М3.4): страница на 401 шлёт сюда
+    initData — ответ говорит, каким ключом/алгоритмом оно подписано."""
+    data = await _body(request)
+    if data is None:
+        return JSONResponse({"error": "нужен JSON-объект"}, status_code=400)
+    return JSONResponse(diagnose_init_data(str(data.get("init") or ""), config.TOKEN))
 
 
 async def _sources(request):
@@ -135,6 +144,7 @@ async def _settings(request):
 
 app = Starlette(routes=[
     Route("/", _page, methods=["GET"]),
+    Route("/api/diag", _diag, methods=["POST"]),
     Route("/api/sources", _sources, methods=["GET"]),
     Route("/api/sources/toggle", _toggle, methods=["POST"]),
     Route("/api/sources/delete", _delete, methods=["POST"]),

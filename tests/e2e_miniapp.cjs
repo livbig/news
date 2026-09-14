@@ -10,7 +10,7 @@ const BASE = process.env.E2E_BASE || 'http://127.0.0.1:8891';
 const TOKEN = process.env.E2E_TOKEN || '70000:E2ETEST';
 const CHAT = parseInt(process.env.E2E_CHAT || '700111222', 10);
 
-function signInitData() {
+function signInitData(tok) {
   const fields = {
     auth_date: '1760000000',
     query_id: 'AAFe2etest',
@@ -21,7 +21,7 @@ function signInitData() {
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   const check = Object.keys(fields).sort()
     .map(k => `${k}=${fields[k]}`).join('\n');  // hash по DECODED-значениям
-  const secret = crypto.createHmac('sha256', TOKEN).update('WebAppData').digest();
+  const secret = crypto.createHmac('sha256', tok || TOKEN).update('WebAppData').digest();
   const hash = crypto.createHmac('sha256', secret).update(check).digest('hex');
   return `${encoded}&hash=${hash}`;
 }
@@ -77,10 +77,21 @@ async function newPage(ctx, initData) {
     await page.goto(BASE + '/', { waitUntil: 'networkidle' });
     await page.waitForSelector('body:has-text("Панель доступна из Telegram")',
                                { timeout: 5000 });
-    const body = await page.textContent('body');
+    let body = await page.textContent('body');
     step('B1 fallback показывает диагностику',
          body.includes('sdk=да') && body.includes('initData=0') &&
          body.includes('причина:'),
+         body.replace(/\s+/g, ' ').trim().slice(0, 220));
+    await ctx.close();
+
+    // --- C: подпись чужим токеном → вердикт «НЕ совпала» + user_id ---------
+    ctx = await browser.newContext();
+    page = await newPage(ctx, signInitData('9:WRONGTOKEN'));
+    await page.goto(BASE + '/', { waitUntil: 'networkidle' });
+    await page.waitForSelector('body:has-text("НЕ совпала")', { timeout: 5000 });
+    body = await page.textContent('body');
+    step('C1 чужой токен: вердикт diag виден',
+         body.includes('НЕ совпала') && body.includes(`user=${CHAT}`),
          body.replace(/\s+/g, ' ').trim().slice(0, 220));
     await ctx.close();
   } finally {

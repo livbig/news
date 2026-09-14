@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, db, scheduler
 from .handlers.onboarding import TIME_RE, allowed
-from .webauth import verify_init_data_detailed  # общий модуль: локальный сервер и Vercel (М3)
+from .webauth import diagnose_init_data, verify_init_data_detailed  # общий модуль: локальный сервер и Vercel (М3)
 
 log = logging.getLogger("bot.webapp")
 
@@ -49,10 +49,19 @@ async function api(p, body) {
   if (r.status === 401) {
     let d = '';
     try { d = (await r.json()).detail || ''; } catch (e) {}
-    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню бота.' +
+    let diag = '';
+    try {
+      const rr = await fetch('/api/diag', {method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({init: tg ? tg.initData : ''})});
+      const j = await rr.json();
+      diag = ' user=' + (j.user_id || '?') + ' подпись=' +
+             (j.alg_decoded_ok ? 'OK' : (j.alg_raw_ok ? 'OK(legacy)' : 'НЕ совпала с токеном этого бота — кнопка от ДРУГОГО бота?'));
+    } catch (e) {}
+    document.body.textContent = 'Панель доступна из Telegram — откройте её кнопкой из меню основного бота (не дев-бота).' +
       ' [диагностика: sdk=' + (window.Telegram ? 'да' : 'нет') +
       ', initData=' + (tg ? tg.initData.length : 0) + ' симв.' +
-      (d ? ', причина: ' + d : '') + ']';
+      (d ? ', причина: ' + d : '') + diag + ']';
     throw new Error('unauthorized');
   }
   if (!r.ok) throw new Error(await r.text());
@@ -161,6 +170,12 @@ class Handler(BaseHTTPRequestHandler):
     # --- POST ---------------------------------------------------------------
 
     def do_POST(self):
+        if self.path == "/api/diag":  # диагностика без авторизации (М3.4)
+            data = self._body()
+            if data is None:
+                return self._send(400, {"error": "нужен JSON-объект"})
+            return self._send(200, diagnose_init_data(
+                str(data.get("init") or ""), config.TOKEN))
         user, reason = self._auth()
         if user is None:
             return self._unauthorized(reason)
