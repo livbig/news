@@ -189,6 +189,9 @@ async def slots_once(conn, now: datetime | None = None) -> list[int]:
 
 
 async def slots_loop(conn) -> None:
+    from . import db
+    from .handlers import onboarding  # лениво: цикл импортов + актуальный хендл
+
     log.info(
         "slots: подготовка за %dc, тик %dc (точность ±1 мин), повтор доставки %dc",
         PREP_LEAD, SLOT_TICK, SEND_RETRY,
@@ -196,6 +199,11 @@ async def slots_loop(conn) -> None:
     while True:
         try:
             await slots_once(conn)
-        except Exception as exc:  # pragma: no cover — страховка цикла
+        except Exception as exc:
             log.error("slots: %s", exc)
+            fresh = db.reconnect(conn)  # обрыв сети → битый PG-коннект (2026-09-14)
+            if fresh is not conn:
+                conn = fresh
+                onboarding.conn = fresh  # хендлеры берут соединение отсюда же
+                log.info("slots: соединение с БД пересоздано")
         await asyncio.sleep(SLOT_TICK)

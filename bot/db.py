@@ -271,6 +271,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def is_broken(conn) -> bool:
+    """Мёртвое соединение (М2: PG-коннект к Supabase после обрыва сети
+    вечно отдаёт «another command is already in progress» — инцидент
+    2026-09-14). sqlite — файл на диске, ломаться нечему."""
+    if conn is None or isinstance(conn, _SqliteConn):
+        return False
+    try:
+        conn.execute("SELECT 1").fetchone()
+        return False
+    except Exception:
+        return True
+
+
+def reconnect(conn):
+    """Битое PG-соединение → свежее (вызывает slots_loop при сбое тика).
+    Не бросает: если сеть ещё недоступна, вернёт старое — повтор на
+    следующем тике (20 с)."""
+    if not is_broken(conn):
+        return conn
+    try:
+        conn.close()
+    except Exception:
+        pass
+    try:
+        return connect()
+    except Exception:
+        return conn
+
+
 def minus_iso(now: str, hours: int) -> str:
     """ISO-метка на `hours` часов раньше данной (для периода сводки, D9)."""
     moment = datetime.fromisoformat(now.replace("Z", "+00:00")) - timedelta(hours=hours)

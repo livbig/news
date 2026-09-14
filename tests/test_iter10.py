@@ -231,5 +231,40 @@ class SetupCommands(unittest.TestCase):
         self.assertEqual(names, ["start", "sources", "settings", "digest", "stats"])
 
 
+# --- reconnect: битое PG-соединение после обрыва сети (инцидент 2026-09-14) -------
+
+class Reconnect(unittest.TestCase):
+
+    def test_sqlite_and_none_passthrough(self):
+        from bot import db
+
+        conn = db.connect(":memory:")
+        self.assertIs(db.reconnect(conn), conn)  # sqlite — живое всегда
+        self.assertFalse(db.is_broken(conn))
+        self.assertFalse(db.is_broken(None))
+
+    def test_broken_conn_replaced(self):
+        from unittest import mock
+
+        from bot import db
+
+        old = mock.MagicMock()  # close() есть, execute() падать не должен — мокаем is_broken
+        fresh = object()
+        with mock.patch.object(db, "is_broken", return_value=True), \
+                mock.patch.object(db, "connect", return_value=fresh):
+            self.assertIs(db.reconnect(old), fresh)
+        old.close.assert_called_once()
+
+    def test_connect_failure_keeps_old(self):
+        from unittest import mock
+
+        from bot import db
+
+        old = mock.MagicMock()
+        with mock.patch.object(db, "is_broken", return_value=True), \
+                mock.patch.object(db, "connect", side_effect=RuntimeError("сеть недоступна")):
+            self.assertIs(db.reconnect(old), old)  # повтор на следующем тике
+
+
 if __name__ == "__main__":
     unittest.main()
