@@ -1,0 +1,5 @@
+aiogram==3.31.0
+httpx==0.28.1
+feedparser==6.0.14
+beautifulsoup4==4.15.0
+psycopg[binary]==3.3.5

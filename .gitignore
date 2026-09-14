@@ -1,0 +1,9 @@
+.env
+news.db
+logs/
+digests/
+__pycache__/
+.venv/
+bot.db
+.vercel/
+.kilo/plans/
