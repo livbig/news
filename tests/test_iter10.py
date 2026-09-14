@@ -266,5 +266,24 @@ class Reconnect(unittest.TestCase):
             self.assertIs(db.reconnect(old), old)  # повтор на следующем тике
 
 
+# --- health-порт для Docker-хостинга (HF Space рестартует контейнер без живого порта)
+
+class HealthEndpoint(unittest.TestCase):
+
+    def test_health_answers_200(self):
+        import httpx
+
+        from bot.__main__ import start_health
+
+        server = start_health(0)  # порт 0 → случайный свободный
+        port = server.server_address[1]
+        try:
+            r = httpx.get(f"http://127.0.0.1:{port}/anything", timeout=5)
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.text, "ok")
+        finally:
+            server.shutdown()
+
+
 if __name__ == "__main__":
     unittest.main()

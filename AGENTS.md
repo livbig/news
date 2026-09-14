@@ -35,10 +35,39 @@
 - Перед каждым пушем — скан снапшота на идентификаторы (chat_id, @usernames,
   /Users/, токен-паттерны): `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
 
-## Бот-демон (launchd, автозапуск при входе в систему)
+## Прод-хостинг: HF Space (с 2026-09-14/15; Mac — откат)
+
+- Прод: Hugging Face Space `<user>/news` (приватный, sdk: docker, app_port
+  7860). Процесс тот же: `python3 -m bot` (Dockerfile, TZ=Europe/Moscow).
+  Состояние — только Supabase; локальные файлы контейнера эфемерны.
+- Автодеплой: push в origin main (публичный снапшот) → GH Action `deploy`
+  → upload_folder в Space → пересборка. Логи: Space → Logs (только владелец).
+- Секреты/vars Space: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, LLM_API_KEY,
+  LLM_BASE_URL, LLM_MODEL, SUPABASE_DB_URL, TZ=Europe/Moscow,
+  BOT_HEALTH_PORT=7860, BOT_IP_PIN=0 (облаку пиннинг не нужен; по умолчанию
+  на Mac включён). GH secrets: HF_TOKEN; GH vars: HF_REPO_ID, HF_SPACE_HOST.
+- Keep-alive: GH Action `keepalive` (cron */20) пингует /health с HF_TOKEN —
+  приватный Space на free засыпает через 48 ч без HTTP-входящего. /health —
+  тред в bot/__main__ (BOT_HEALTH_PORT); без живого порта Space рестартует
+  контейнер по кругу.
+- Рестарт Space: Settings → Factory reboot (или pause/resume). Рестарты
+  безопасны: catch-up дошлёт пропущенную сводку (FR-12), FSM-диалоги
+  сбросятся (как и на Mac).
+- Откат на Mac (cold standby): plist сохранён. Порядок: Space → Settings →
+  Pause Space (ЕДИНСТВЕННЫЙ getUpdates, иначе 409) →
+  `launchctl enable gui/501/com.fifth.newsbot` (если был disabled) →
+  `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`.
+  Возврат на Space: `launchctl bootout gui/501/com.fifth.newsbot` +
+  `launchctl disable gui/501/com.fifth.newsbot` → Resume Space.
+- Ручные CLI-прогоны pipeline (run/digest) — на Mac с остановленным агентом
+  (SQLite-блокировки, R5); news.db остаётся только на Mac.
+
+## Откат-наследие: launchd (историческое, для отката)
 
 - Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`,
   с 2026-09-13 запускает нового бота: `python3 -m bot` (миграция И7, решение D24).
+  С 2026-09-15 ОТКЛЮЧЁН (прод переехал на HF Space): `launchctl disable` +
+  bootout; plist сохранён для отката (см. раздел выше).
   Один потребитель getUpdates: перед ручным запуском бота останови агент (иначе 409).
 - Сводки per-user, двухфазно: подготовка (сбор + LLM) за 10 мин до слота,
   отправка ровно в слот; расписание каждого чата — в `/settings` (bot.db,

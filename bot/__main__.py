@@ -3,13 +3,38 @@ import pipeline  # noqa: F401 — IP-пиннинг api.telegram.org (решен
 
 import asyncio
 import logging
+import os
 import sys
+import threading
 
 from pipeline.config import setup_logging
 
 from . import collect, config, db, digest, handlers, tgsend
 
 log = logging.getLogger("bot")
+
+
+def start_health(port: int):
+    """HTTP-маяк для Docker-хостинга (HF Space требует живой порт, иначе
+    рестартует контейнер; keep-alive-пинг бьёт сюда же). Только stdlib,
+    никаких данных наружу. Возвращает сервер (тесты)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True,
+                     name="bot-health").start()
+    log.info("health: 0.0.0.0:%s", port)
+    return server
 
 
 def run_mock(conn) -> int:
@@ -31,6 +56,8 @@ def run_mock(conn) -> int:
 
 def main() -> int:
     setup_logging()
+    if os.environ.get("BOT_HEALTH_PORT"):
+        start_health(int(os.environ["BOT_HEALTH_PORT"]))
     conn = db.connect()
     handlers.init(conn)
     if not config.TOKEN:
