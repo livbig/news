@@ -3,6 +3,50 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-14 — cleanup (фазы 1–3): Mini App вырезан целиком
+
+- **Аудит (фаза 1)**: стек — все пины = PyPI latest (обновления не нужны);
+  GitHub — только livbig, на remote одна ветка main; Vercel — один проект
+  `news`; Supabase — 9 таблиц, артефактов нет (`debug_auth_log`: 9 строк,
+  4 с initData >400 симв. — актив фазы 5); Telegram — вебхуков нет ни у
+  одного бота, у прода web_app меню-кнопка на домен миниаппа (наследие М3.3).
+- **Диф**: `cleanup-A` — удалены `bot/webapp.py`, `bot/webauth.py`,
+  `bot/pgstorage.py`, `api/`, `public/`, `vercel.json`; `config.py` без
+  `WEBAPP_*`/`TELEGRAM_WEBHOOK_SECRET`; `handlers/__init__` без
+  webapp.start/stop и setup_menu_button; `menu.py` без `menu:webapp`;
+  `keyboards.py` без кнопки «Веб-панель»; `db.py` — обе схемы без
+  `processed_updates`/`debug_auth_log`, удалены `mark_update_seen`/
+  `cleanup_processed_updates` (данные существующих БД НЕ дропались).
+  `cleanup-B` — удалены тесты iter8/8b/9/10 и e2e (миниапп/webhook).
+  `cleanup-C` — requirements без starlette; `.env.example`/`.env` без
+  miniapp/webhook-переменных и `VERCEL_TOKEN`. `cleanup-F` — этот лог и
+  пометки в AGENTS/plan/requirements/TESTPLAN.
+- **Облака**: Vercel-проект `news` УДАЛЁН (DELETE /v9/projects/news → 204;
+  домен news-livbig.vercel.app мёртв навсегда); ветка `public` пересобрана
+  orphan-ом (2d3c33b), скан на идентификаторы — 0 хитов, diff HEAD↔main —
+  только приватные пути; push -f origin public:main. Supabase не тронут.
+- **Telegram**: прод-боту сброшена меню-кнопка — chat-scoped web_app override
+  и глобальная web_app («Новости» → домен миниаппа) устранены; теперь
+  везде стандартное меню (первое чтение после сброса показывало старое
+  значение — лаг консистентности API, перепроверено).
+- **Находка**: в `.env` остался непустой `TELEGRAM_TOKEN_DEV` от отладки М3.3 —
+  перезапуск агента молча переключил бы прод на @Testernewsbotbot (config.py
+  даёт DEV приоритет, а живой агент с 13.09 20:23 был запущен ДО правок .env
+  и поллил @cumulativenewsbot). DEV-токен закомментирован (значение
+  сохранено в файле), агент после рестарта — на прод-токене (подтверждено
+  по «Run polling» в логе).
+- **Тесты**: 61/61 sqlite (`BOT_TEST_PG_URL=`) + 61/61 PG (docker `news-pg`);
+  py_compile изменённых модулей; grep webapp/webauth/pgstorage по bot/ — 0.
+- **Живая часть (смоук на прод-токене, агент временно остановлен)**: /start —
+  меню без «Веб-панель»; «Сводка сейчас», /sources, /settings, свободный
+  текст — работают. Наблюдения (в работу фазы 4): (1) разовый сбой LLM
+  «пустой ответ (только thinking-блоки?)» → mock-фолбэк отработал по дизайну,
+  следующая сводка штатная; (2) LLM вставил литеральный `<br>` — экранируется
+  как текст (нужна нормализация в сборке сводки); (3) синей кнопки меню нет —
+  `setMyCommands` ботом никогда не вызывался (пока висела web_app-кнопка,
+  это было незаметно) — добавить в фазе 4. Агент перезапущен
+  (bootstrap), state=running, поллинг @cumulativenewsbot.
+
 ## 2026-09-14 — Итерация М3.5 (захват реального initData в БД + матрица алгоритмов)
 
 - **Данные с устройства (М3.4, окончательные)**: юзер нажал кнопку из СВЕЖЕГО

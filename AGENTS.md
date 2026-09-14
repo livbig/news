@@ -59,17 +59,12 @@
   раздельны — откат ничего не теряет.
 - Ручные CLI-прогоны pipeline (run/digest) — только при остановленном агенте
   (SQLite-блокировки, R5).
-- Mini App (М3): постоянный https-домен `https://news-livbig.vercel.app`
-  (Vercel, проект `news`, деплой = git push в ветку `public` → `origin public:main`;
-  api/ + public/ + vercel.json). В `.env` `BOT_WEBAPP_PUBLIC_URL=https://news-livbig.vercel.app`,
-  `kickstart` переставляет меню-кнопку. cloudflared-туннель снесён (2026-09-13).
-  Локальный `webapp.py` (порт 8087) остаётся для dev/тестов. URL умер → кнопки
-  дают текст-подсказку, бот жив (fallback, FR-17).
-- Vercel-доступ: scoped-токен в `.env` `VERCEL_TOKEN` (проектные эндпоинты API;
-  `/v2/user` для него недоступен — «User not found» это норма). Env проекта:
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, SUPABASE_DB_URL, LLM_API_KEY, LLM_MODEL
-  (+ служебные). TELEGRAM_TOKEN_DEV на Vercel держать удалённым: bot/config
-  отдаёт ему приоритет — с ним Mini App API подписывает не тем токеном.
+- Mini App (М3, FR-17): УДАЛЁН 2026-09-14 (cleanup-A/B/C: `bot/webapp.py`,
+  `bot/webauth.py`, `bot/pgstorage.py`, `api/`, `public/`, `vercel.json`).
+  Vercel-проект `news` и домен `news-livbig.vercel.app` удалены; web_app
+  меню-кнопка прод-бота сброшена на стандартную. Решение — отложить; возврат =
+  отдельная фаза 5 (активы: `debug_auth_log` в Supabase с реальным initData;
+  полная реализация в git-истории до `658281c`).
 
 ## Конфигурация
 
