@@ -3,7 +3,9 @@ tgweb (скрейпер t.me/s, R6), twitter (RSS-мост, N4)."""
 import calendar
 import logging
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit
 
@@ -26,8 +28,14 @@ HTML_MIN_TEXT = 10   # эвристика «ссылка-статья», а не
 DEGRADED_KINDS = ("tgweb", "twitter")
 
 TG_NAME_RE = re.compile(r"^[A-Za-z0-9_]{4,32}$")
+TG_LINK_RE = re.compile(r"(?:t\.me|telegram\.me|telegram\.dog)/(?:s/)?([A-Za-z0-9_]+)")
+TG_INVITE_RE = re.compile(r"(?:t\.me|telegram\.me|telegram\.dog)/(?:\+|joinchat/)")
 REDDIT_NAME_RE = re.compile(r"^[A-Za-z0-9_]{2,21}$")
 TWITTER_NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+
+
+class TgInviteError(ValueError):
+    """Ссылка-приглашение в приватный канал (t.me/+…, /joinchat) — D48."""
 
 
 def _pause(seconds: float) -> None:
@@ -67,11 +75,19 @@ def validate_http_url(value: str) -> str | None:
 
 
 def tg_name(value: str) -> str | None:
-    value = value.strip().rstrip("/")
-    m = re.search(r"t\.me/s?/([A-Za-z0-9_]+)", value)
-    if m:
-        value = m.group(1)
-    return value if TG_NAME_RE.match(value) else None
+    """Имя публичного канала из @имя, имени, t.me/имя, t.me/s/имя,
+    telegram.me|dog/имя (D48); query и трейлинг «/» срезаются.
+    Invite-ссылка — TgInviteError; нечитаемое — None (repr в лог)."""
+    raw = (value or "").strip()
+    if TG_INVITE_RE.search(raw):
+        raise TgInviteError(raw)
+    value = raw.split("?", 1)[0].rstrip("/")
+    m = TG_LINK_RE.search(value)
+    value = m.group(1) if m else value.lstrip("@")
+    if TG_NAME_RE.match(value):
+        return value
+    log.warning("tgweb: не удалось распознать канал: %r", raw)
+    return None
 
 
 def reddit_name(value: str) -> str | None:
@@ -251,19 +267,23 @@ def collect_one(conn, row) -> int:
 
 
 def collect_enabled(conn, chat_id):
-    """Собрать все включённые источники чата (все типы). Отказ одного не валит
+    """Собрать все включённые источники чата (все типы). iter-11c (D44):
+    rss/html/twitter — параллельно (пул BOT_COLLECT_WORKERS), tgweb — строго
+    последовательно после остальных (щадящие паузы t.me, FR-07); вызовы БД
+    из воркеров сериализует _LockedConn (общий conn). Отказ одного не валит
     прогон (NFR-02): ошибка — в лог с URL и исключением, tgweb/twitter —
     деградация (D3), остальные — error; сводка продолжается."""
-    total = 0
-    errors = []
-    tgweb_seen = False
-    for row in db.enabled_sources(conn, chat_id):
-        if row["kind"] == "tgweb":
-            if tgweb_seen:
-                _pause(TGWEB_PAUSE)  # пауза между каналами t.me (FR-07)
-            tgweb_seen = True
+    rows = list(db.enabled_sources(conn, chat_id))
+    if not rows:
+        return 0, []
+    pool_rows = [r for r in rows if r["kind"] != "tgweb"]
+    tg_rows = [r for r in rows if r["kind"] == "tgweb"]
+    lconn = _LockedConn(conn)
+    total, errors = 0, []
+
+    def safe(row):
         try:
-            total += collect_one(conn, row)
+            return collect_one(lconn, row), None
         except Exception as exc:
             try:
                 failed_url = fetch_url(row["kind"], row["url"])
@@ -271,15 +291,57 @@ def collect_enabled(conn, chat_id):
                 failed_url = row["url"]
             log.error("FAIL %s: %r", failed_url, exc)
             status = "degraded" if row["kind"] in DEGRADED_KINDS else "error"
-            db.set_source_status(conn, row["id"], status, str(exc)[:200])
-            errors.append((failed_url, exc))
+            db.set_source_status(lconn, row["id"], status, str(exc)[:200])
+            return 0, (failed_url, exc)
+
+    if pool_rows:
+        workers = min(config.COLLECT_WORKERS, len(pool_rows))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for added, err in pool.map(safe, pool_rows):
+                total += added
+                if err:
+                    errors.append(err)
+    for i, row in enumerate(tg_rows):
+        if i:
+            _pause(TGWEB_PAUSE)  # пауза между каналами t.me (FR-07)
+        added, err = safe(row)
+        total += added
+        if err:
+            errors.append(err)
     return total, errors
+
+
+class _LockedConn:
+    """Прокси общего conn для воркеров пула: каждый вызов БД под Lock
+    (sqlite check_same_thread=False уже разрешает чужие потоки; PG
+    autocommit не терпит параллельных команд — единый лок для обоих)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._lock = threading.Lock()
+
+    def execute(self, sql, params=()):
+        with self._lock:
+            return self._conn.execute(sql, params)
+
+    def executemany(self, sql, seq):
+        with self._lock:
+            return self._conn.executemany(sql, seq)
+
+    def commit(self):
+        with self._lock:
+            return self._conn.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
 
 
 # --- превью мастера добавления -------------------------------------------------------
 
 PREVIEW_NOUN = {"rss": "фид", "html": "страницу", "tgweb": "канал",
                 "reddit": "фид", "twitter": "фид"}
+
+VALIDATE_WORKERS = 4  # 11d/D45: параллельная проверка кандидатов LLM (t.me — мимо пула)
 
 
 def _entry_titles(entries, count=3) -> list[str]:
@@ -308,9 +370,18 @@ def make_preview(kind: str, value: str) -> tuple[str, str, list[str]]:
             raise RuntimeError("На странице не найдено ссылок на статьи — это точно список новостей?")
         return urlsplit(url).netloc, url, [t for _u, t in items[:3]]
     if kind == "tgweb":
-        name = tg_name(value)
+        try:
+            name = tg_name(value)
+        except TgInviteError:
+            raise ValueError(
+                "Это ссылка-приглашение в приватный канал. "
+                "Нужен публичный @username или ссылка t.me/имя"
+            ) from None
         if not name:
-            raise ValueError("Не похоже на имя канала. Отправьте имя (A-z, 0-9, _) или ссылку t.me/имя")
+            raise ValueError(
+                "Не похоже на имя канала. Отправьте @имя (например, @durov), "
+                "ссылку t.me/имя или перешлите любой пост канала"
+            )
         try:
             pages = fetch_tgweb_pages(name, 0)
         except httpx.HTTPStatusError as exc:
@@ -343,3 +414,34 @@ def make_preview(kind: str, value: str) -> tuple[str, str, list[str]]:
             raise RuntimeError(f"Не удалось прочитать фид моста: {exc}") from None
         return f"@{name}", name, _entry_titles(entries)
     raise ValueError("Неизвестный тип источника")
+
+
+def validate_candidates(candidates) -> list[dict]:
+    """Валидация кандидатов LLM (11d/D45): каждый прогоняется через
+    make_preview (канонизация + живость). rss/html — пул из 4 воркеров,
+    tgweb — строго последовательно (щадящий режим t.me, пауза между
+    каналами).     Невалидные отсекаются с логом; результат — 40-60 штук
+    {title, kind, url} из выживших."""
+    def check(entry):
+        try:
+            title, url, _lines = make_preview(entry["kind"], entry["url"])
+        except Exception as exc:
+            log.warning("кандидат отсечён [%s] %r: %r", entry["kind"], entry["url"], exc)
+            return None
+        return {"title": title, "kind": entry["kind"], "url": url}
+
+    tg_entries = [c for c in candidates if c["kind"] == "tgweb"]
+    pool_entries = [c for c in candidates if c["kind"] != "tgweb"]
+    valid = []
+    if pool_entries:
+        with ThreadPoolExecutor(max_workers=min(VALIDATE_WORKERS, len(pool_entries))) as pool:
+            for item in pool.map(check, pool_entries):
+                if item:
+                    valid.append(item)
+    for i, entry in enumerate(tg_entries):
+        if i:
+            _pause(TGWEB_PAUSE)
+        item = check(entry)
+        if item:
+            valid.append(item)
+    return valid

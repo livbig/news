@@ -9,7 +9,7 @@ import threading
 
 from pipeline.config import setup_logging
 
-from . import collect, config, db, digest, handlers, tgsend
+from . import collect, config, db, digest, handlers, scheduler, tgsend
 
 log = logging.getLogger("bot")
 
@@ -60,6 +60,10 @@ def main() -> int:
         start_health(int(os.environ["BOT_HEALTH_PORT"]))
     conn = db.connect()
     handlers.init(conn)
+    try:
+        scheduler.retention_once(conn)  # 11e/D47: один прогон retention на старте
+    except Exception as exc:
+        log.error("retention на старте: %s", exc)
     if not config.TOKEN:
         log.warning("TELEGRAM_TOKEN(_DEV) не заданы — mock-режим: сводка в stdout")
         return run_mock(conn)

@@ -1,5 +1,5 @@
-"""Итерация 2: TC-01, TC-02 (подбор каталога), TC-33 (финализация A/B),
-TC-10 (FSM-таймаут sweeper) — tests/TESTPLAN.md."""
+"""Итерация 2 → 11d: TC-01/TC-02 (каталог — fallback-пул, D45), TC-33
+(финализация A/B), TC-10 (FSM-таймаут sweeper) — tests/TESTPLAN.md."""
 import os
 import sys
 import time
@@ -12,46 +12,30 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("BOT_FSM_TIMEOUT", "1")  # порог таймаута для TC-10 (секунды)
 
 
-class TC01CatalogPick(unittest.TestCase):
-    """Подбор источников каталога по темам: фильтр по тегам, объединение, лимит ~8."""
+class TC01CatalogFallback(unittest.TestCase):
+    """11d/D45: каталог — fallback-пул целиком; темы/лимит подбора удалены."""
 
-    def test_pick(self):
+    def test_pick_returns_whole_catalog(self):
         from bot import catalog
 
-        single = catalog.pick(["metals_fx"])
-        self.assertTrue(single)
-        self.assertTrue(all("metals_fx" in e["topics"] for e in single))
-        self.assertLessEqual(len(single), catalog.PICK_LIMIT)
-
-        pair = catalog.pick(["tech_ai", "macro"])
-        tags = {t for e in pair for t in e["topics"]}
-        self.assertTrue(tags <= {"tech_ai", "macro"})
-        self.assertLessEqual(len(pair), catalog.PICK_LIMIT)
-        # объединение: есть и tech_ai-, и macro-источники
-        self.assertTrue(any("macro" in e["topics"] for e in pair))
-        self.assertTrue(any("tech_ai" in e["topics"] for e in pair))
-        # неизвестные теги игнорируются, не роняя подбор
-        self.assertEqual(
-            [e["id"] for e in catalog.pick(["metals_fx", "nonsense"])],
-            [e["id"] for e in catalog.pick(["metals_fx"])],
-        )
+        self.assertEqual(catalog.pick(["metals_fx"]), catalog.CATALOG)  # темы игнорируются
+        self.assertEqual(catalog.pick([]), catalog.CATALOG)
+        # порядок = порядок файла
+        self.assertEqual([e["id"] for e in catalog.pick()],
+                         [e["id"] for e in catalog.CATALOG])
 
 
-class TC02CatalogDefault(unittest.TestCase):
-    """Ноль выбранных тем → дефолтный непустой набор по приоритетным темам."""
+class TC02CatalogEntries(unittest.TestCase):
+    """Записи каталога пригодны для мультивыбора и финализации (kind обязателен)."""
 
-    def test_default(self):
+    def test_entries_structure(self):
         from bot import catalog
 
-        default = catalog.pick([])
-        self.assertTrue(default)
-        allowed_topics = set(catalog.DEFAULT_TOPICS)
-        self.assertTrue(all(
-            allowed_topics & set(e["topics"]) for e in default
-        ))
-        # без крипты/геополитики/макро в дефолте
-        banned = {"crypto", "geopolitics", "macro"}
-        self.assertFalse(any(banned & set(e["topics"]) for e in default))
+        self.assertTrue(catalog.CATALOG)
+        for entry in catalog.CATALOG:
+            self.assertTrue(entry["title"] and entry["url"], entry)
+            self.assertIn(entry["kind"], ("rss", "tgweb", "html"))
+            self.assertIsInstance(entry.get("topics"), list)
 
 
 class TC33FinalizeModes(unittest.TestCase):
@@ -132,8 +116,8 @@ class TC10FsmTimeout(unittest.TestCase):
             bot = FakeBot()
             storage = MemoryStorage()
             key = StorageKey(bot_id=bot.id, chat_id=42, user_id=42)
-            await storage.set_state(key, Survey.topics)
-            await storage.set_data(key, {"topics": {"crypto"}})
+            await storage.set_state(key, Survey.interview)
+            await storage.set_data(key, {"history": []})
             onboarding.ACTIVE.clear()
             onboarding.ACTIVE[(42, 42)] = time.time() - 10  # давно
 

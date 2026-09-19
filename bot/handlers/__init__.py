@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .. import config
-from ..scheduler import fsm_sweeper, slots_loop
+from ..scheduler import collect_loop, fsm_sweeper, retention_loop, slots_loop
 from . import menu, onboarding, settings, sources
 
 log = logging.getLogger("bot.handlers")
@@ -57,6 +57,8 @@ async def run():
     dp = build_dispatcher()
     sweeper = asyncio.create_task(fsm_sweeper(bot, dp.storage))
     slots = asyncio.create_task(slots_loop(onboarding.conn))
+    collector = asyncio.create_task(collect_loop(onboarding.conn))  # 11c/D44
+    retention = asyncio.create_task(retention_loop(onboarding.conn))  # 11e/D47
     await setup_commands(bot)
     log.info("Бот запускается (long polling)")
     try:
@@ -64,3 +66,5 @@ async def run():
     finally:
         sweeper.cancel()
         slots.cancel()
+        collector.cancel()
+        retention.cancel()

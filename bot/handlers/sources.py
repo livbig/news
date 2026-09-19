@@ -16,11 +16,18 @@ log = logging.getLogger("bot.sources")
 
 router = Router()
 
+# страница CRUD-списка на чат (11d/D46: 100 источников — клавиатура с пагинацией)
+_pages: dict[int, int] = {}
+
+
+def _list_kb(chat_id: int, rows):
+    return keyboards.sources_manage_kb(rows, _pages.get(chat_id, 0))
+
 # подсказки шага AsUrl по типу (план §1.3)
 KIND_PROMPTS = {
     "rss": "Отправьте ссылку на RSS/Atom-фид, например https://site.com/rss",
     "html": "Отправьте ссылку на страницу со списком новостей, например https://site.com/news",
-    "tgweb": "Отправьте имя публичного канала (например, durov) или ссылку t.me/durov",
+    "tgweb": "Отправьте @имя канала (например, @durov), ссылку t.me/durov или перешлите любой пост канала",
     "reddit": "Отправьте имя сабреддита, например wallstreetbets или r/wallstreetbets",
     "twitter": "Отправьте имя аккаунта X, например @durov",
 }
@@ -55,8 +62,9 @@ async def cmd_sources(message: Message, state: FSMContext):
     await _drop(state)
     if not allowed(message.chat.id):
         return
+    _pages.pop(message.chat.id, None)  # /sources — список с первой страницы
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, message.chat.id)
-    await message.answer(_list_text(rows), reply_markup=keyboards.sources_manage_kb(rows))
+    await message.answer(_list_text(rows), reply_markup=_list_kb(message.chat.id, rows))
 
 
 @router.callback_query(F.data == "menu:list")
@@ -64,7 +72,17 @@ async def cq_menu_list(cb: CallbackQuery):
     if not allowed(cb.message.chat.id):
         return await cb.answer()
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, cb.message.chat.id)
-    await cb.message.edit_text(_list_text(rows), reply_markup=keyboards.sources_manage_kb(rows))
+    await cb.message.edit_text(_list_text(rows), reply_markup=_list_kb(cb.message.chat.id, rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("src:pg:"))
+async def cq_list_page(cb: CallbackQuery):
+    if not allowed(cb.message.chat.id):
+        return await cb.answer()
+    _pages[cb.message.chat.id] = int(cb.data.rsplit(":", 1)[1])
+    rows = await asyncio.to_thread(db.list_sources, onboarding.conn, cb.message.chat.id)
+    await cb.message.edit_text(_list_text(rows), reply_markup=_list_kb(cb.message.chat.id, rows))
     await cb.answer()
 
 
@@ -110,7 +128,7 @@ async def cq_delete_yes(cb: CallbackQuery):
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, cb.message.chat.id)
     await cb.message.edit_text(
         f"Удалено: «{row['title']}».\n\n" + _list_text(rows),
-        reply_markup=keyboards.sources_manage_kb(rows),
+        reply_markup=_list_kb(cb.message.chat.id, rows),
     )
     await cb.answer()
 
@@ -143,15 +161,15 @@ async def cq_kind(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.message(StateFilter(AddSource.url), F.text & ~F.text.startswith("/"))
-async def ms_url(message: Message, state: FSMContext):
+async def _preview(message: Message, state: FSMContext, kind: str, value: str) -> None:
+    """Общий хвост мастера (шаг AsUrl): превью значения → подтверждение (D48:
+    и текст, и пересланный пост идут одним путём). Ошибка — состояние
+    сохраняется, шаг повторяется (TC-12/TC-15…TC-19)."""
     _touch(message.chat.id, message.from_user.id)
-    data = await state.get_data()
-    kind = data.get("kind") or "rss"
     try:
-        title, url, lines = await asyncio.to_thread(collect.make_preview, kind, message.text)
+        title, url, lines = await asyncio.to_thread(collect.make_preview, kind, value)
     except Exception as exc:
-        log.error("Превью не удалось [%s] %s: %r", kind, message.text, exc)
+        log.error("Превью не удалось [%s] %r: %r", kind, value, exc)
         await message.answer(f"{exc}\n\nПроверьте адрес и отправьте снова.")
         return
     word = "посты" if kind == "tgweb" else "заголовки"
@@ -166,6 +184,31 @@ async def ms_url(message: Message, state: FSMContext):
     )
 
 
+@router.message(StateFilter(AddSource.url), F.forward_origin)
+async def ms_forward(message: Message, state: FSMContext):
+    """Пересланный пост канала → источник tgweb (D48): вид форсируется в
+    tgweb независимо от выбранного типа; форвард не из публичного канала
+    (без @username) или от пользователя — понятная ошибка."""
+    origin = message.forward_origin
+    username = getattr(getattr(origin, "chat", None), "username", None)
+    if getattr(origin, "type", None) != "channel" or not username:
+        await message.answer(
+            "Пересланный пост — не из публичного канала (или у канала нет "
+            "@username). Перешлите пост из публичного канала, отправьте "
+            "@имя или ссылку t.me/имя.\nОтмена — /sources."
+        )
+        return
+    await _preview(message, state, "tgweb", username)
+
+
+# регистрация после ms_forward: пересланный пост с текстом ловится им первым
+@router.message(StateFilter(AddSource.url), F.text & ~F.text.startswith("/"))
+async def ms_url(message: Message, state: FSMContext):
+    data = await state.get_data()
+    kind = data.get("kind") or "rss"
+    await _preview(message, state, kind, message.text)
+
+
 @router.callback_query(StateFilter(AddSource.preview), F.data == "a:confirm")
 async def cq_confirm(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -174,6 +217,10 @@ async def cq_confirm(cb: CallbackQuery, state: FSMContext):
         db.add_source, onboarding.conn, chat_id, data.get("kind") or "rss",
         data["url"], data["title"],
     )
+    if source_id == "limit":
+        await cb.answer(
+            f"Достигнут лимит источников ({config.MAX_SOURCES})", show_alert=True)
+        return
     if source_id is None:
         await cb.answer("Такой источник уже добавлен", show_alert=True)
     else:
@@ -182,7 +229,7 @@ async def cq_confirm(cb: CallbackQuery, state: FSMContext):
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, chat_id)
     verb = "уже в списке" if source_id is None else f"добавлено: «{data['title']}»"
     await cb.message.edit_text(
-        f"{verb}.\n\n" + _list_text(rows), reply_markup=keyboards.sources_manage_kb(rows)
+        f"{verb}.\n\n" + _list_text(rows), reply_markup=_list_kb(chat_id, rows)
     )
     await _drop(state)
 
@@ -194,7 +241,7 @@ async def cq_add_cancel(cb: CallbackQuery, state: FSMContext):
     rows = await asyncio.to_thread(db.list_sources, onboarding.conn, cb.message.chat.id)
     await cb.message.edit_text(
         "Добавление отменено.\n\n" + _list_text(rows),
-        reply_markup=keyboards.sources_manage_kb(rows),
+        reply_markup=_list_kb(cb.message.chat.id, rows),
     )
     await cb.answer()
 

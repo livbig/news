@@ -254,9 +254,10 @@ class TC29MockDigest(ChatCase):
         for url in ("http://ex.test/1", "http://ex.test/2", "http://ex.test/3",
                     "http://rd.test/1", "http://rd.test/2"):
             self.assertIn(url, chunk)  # каждому пункту — ссылка из items
-        # промпт содержит top-N ограничение (правка сверки к TC-29)
+        # промпт содержит контракт «у каждого пункта — ссылка-эмодзи» (iter-11b/D43)
         from bot import llm
-        self.assertIn("не более 25 пунктов", llm.SYSTEM_PROMPT)
+        self.assertIn('<a href="URL">ЭМОДЗИ</a>', llm.SYSTEM_PROMPT)
+        self.assertIn("ЭМОДЗИ — единственная ссылка пункта", llm.SYSTEM_PROMPT)
 
 
 # --- TC-30 (integration): «печатает…» при долгой /digest, не при быстрой /sources -

@@ -2,10 +2,12 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class Survey(StatesGroup):
-    """Онбординг и повторный опрос (план §1.3)."""
+    """Онбординг и повторный опрос (11d/D45): LLM-интервью → подбор
+    источников → расписание."""
 
-    rs_mode = State()  # повторный опрос: заменить / добавить поверх (D22)
-    topics = State()
+    rs_mode = State()    # повторный опрос: заменить / добавить поверх (D22)
+    interview = State()  # раунды интервью (кнопки «Достаточно»/«Пропустить»)
+    profile = State()    # черновик профиля: «Подправить» / «Верно»
     sources = State()
     freq = State()
     time = State()

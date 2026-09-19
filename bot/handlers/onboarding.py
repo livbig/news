@@ -1,4 +1,7 @@
-"""Онбординг и повторный опрос (FR-01..FR-03). ACTIVE — карта неактивности для sweeper."""
+"""Онбординг и повторный опрос (FR-01..FR-03 → 11d/D45): LLM-интервью
+(5-8 раундов) → профиль интересов → LLM-подбор источников (валидация,
+мультивыбор, fallback — каталог) → расписание. ACTIVE — карта неактивности
+для sweeper (длинное интервью обязано трогать _touch каждый раунд)."""
 import asyncio
 import logging
 import re
@@ -9,7 +12,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from .. import catalog, config, db, keyboards
+from .. import catalog, collect, config, db, interview, keyboards, llm
 from ..states import Survey
 
 log = logging.getLogger("bot.onboarding")
@@ -23,10 +26,13 @@ ACTIVE: dict[tuple[int, int], float] = {}
 
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
+MIN_VALID_SOURCES = 15  # меньше валидных кандидатов → fallback-пул каталога (D45)
+
 GREETING = (
     "Персональный новостной ассистент.\n\n"
-    "Короткий опрос — и я сам буду читать ваши источники и в заданное время "
-    "присылать выжимку всего нового. Источники и настройки можно менять позже."
+    "Сначала короткое интервью (5-8 вопросов) — пойму ваши интересы, затем "
+    "подберу источники и расписание. Отвечайте свободным текстом; есть кнопки "
+    "«Достаточно» и «Пропустить вопрос»."
 )
 
 
@@ -61,19 +67,20 @@ async def expire_session(bot, storage, chat_id: int, user_id: int) -> None:
 
 # --- тексты шагов -----------------------------------------------------------
 
-def _topics_text(selected) -> str:
-    if selected:
-        chosen = "\n".join("✓ " + catalog.TOPIC_LABELS[t] for t in sorted(selected))
-    else:
-        chosen = "Если ничего не выбирать — соберу набор по вашим приоритетам."
-    return "1/5. Какие темы читаем глубоко? Можно выбрать несколько.\n\n" + chosen
+def _fresh_data(mode: str) -> dict:
+    return {"mode": mode, "history": [], "rounds": 0, "pool": [], "selected": [],
+            "excluded": set(), "src_page": 0, "times": [], "freq": 1,
+            "interests_draft": None}
 
 
-def _sources_text(pool, excluded) -> str:
+def _sources_text(pool, excluded, page=0) -> str:
+    pages = (len(pool) + keyboards.PAGE_SIZE - 1) // keyboards.PAGE_SIZE
+    suffix = f" (страница {page + 1}/{pages})" if pages > 1 else ""
     titles = "\n".join(
         ("  " if i in excluded else "✓ ") + e["title"] for i, e in enumerate(pool)
     )
-    return f"2/5. Источники по выбранным темам ({len(pool) - len(excluded)} выбрано).\n\n{titles}"
+    return (f"2/5. Источники по вашему профилю — {len(pool) - len(excluded)} из "
+            f"{len(pool)} выбрано{suffix}. Снимите галочки с ненужных.\n\n{titles}")
 
 
 def _time_text(times, freq) -> str:
@@ -87,7 +94,7 @@ def _time_text(times, freq) -> str:
 
 
 def _summary_text(data) -> str:
-    topics = ", ".join(catalog.TOPIC_LABELS[t] for t in data.get("topics") or []) or "по умолчанию"
+    profile = (data.get("interests_draft") or "по умолчанию").strip()
     entries = data.get("selected") or []
     times = sorted(data.get("times") or [])
     freq_word = "1 раз в день" if data.get("freq") == 1 else "2 раза в день"
@@ -95,9 +102,141 @@ def _summary_text(data) -> str:
     when = " и ".join(times)
     return (
         "5/5. Проверьте настройки.\n\n"
-        f"Темы: {topics}\n\nИсточники ({len(entries)}):\n{lines}\n\n"
+        f"Профиль интересов:\n{profile}\n\nИсточники ({len(entries)}):\n{lines}\n\n"
         f"Расписание: {freq_word}, в {when}."
     )
+
+
+# --- интервью (11d/D45) -------------------------------------------------------
+
+async def _start_interview(bot, chat_id, user_id, state) -> None:
+    await state.update_data(history=[], rounds=0)
+    await state.set_state(Survey.interview)
+    _touch(chat_id, user_id)
+    await _ask_question(bot, chat_id, user_id, state)
+
+
+async def _ask_question(bot, chat_id, user_id, state) -> None:
+    """Один раунд интервью: вопрос → сообщение с кнопками. ГОТОВО/сбой →
+    финал или fallback. Каждый раунд трогает ACTIVE (sweeper 600 с)."""
+    data = await state.get_data()
+    history = data.get("history") or []
+    rounds = data.get("rounds") or 0
+    _touch(chat_id, user_id)
+    if rounds >= interview.MAX_ROUNDS:
+        await _finish_interview(bot, chat_id, user_id, state)
+        return
+    question = await asyncio.to_thread(interview.next_question, history)
+    _touch(chat_id, user_id)
+    if question is None:
+        if not history:  # LLM недоступна с самого старта → fallback (D45)
+            await _fallback_pool(bot, chat_id, state,
+                                 "Интервью не получилось — предлагаю базовый набор из каталога.")
+        else:
+            await _finish_interview(bot, chat_id, user_id, state)
+        return
+    await state.update_data(
+        rounds=rounds + 1,
+        history=history + [{"role": "assistant", "content": question}],
+    )
+    await bot.send_message(chat_id, question, reply_markup=keyboards.interview_kb())
+
+
+async def _finish_interview(bot, chat_id, user_id, state) -> None:
+    data = await state.get_data()
+    profile = await asyncio.to_thread(interview.build_profile, data.get("history") or [])
+    _touch(chat_id, user_id)
+    if not profile:  # сборка не удалась → дефолт-профиль + каталог (D45)
+        await _fallback_pool(bot, chat_id, state,
+                             "Не удалось собрать профиль — использую базовые приоритеты и каталог.")
+        return
+    await state.update_data(interests_draft=profile)
+    await state.set_state(Survey.profile)
+    await bot.send_message(
+        chat_id, "Профиль интересов:\n\n" + profile + "\n\nВсё верно?",
+        reply_markup=keyboards.profile_kb(),
+    )
+
+
+async def _fallback_pool(bot, chat_id, state, intro: str) -> None:
+    """LLM недоступна/мало кандидатов: дефолтный профиль, пул = весь каталог."""
+    pool = catalog.pick()
+    await state.update_data(interests_draft=llm.DEFAULT_INTERESTS, pool=pool,
+                            excluded=set(), src_page=0)
+    await state.set_state(Survey.sources)
+    await bot.send_message(
+        chat_id, intro + "\n\n" + _sources_text(pool, set()),
+        reply_markup=keyboards.sources_kb(pool, set(), 0),
+    )
+
+
+@router.callback_query(StateFilter(Survey.interview), F.data == "i:done")
+async def cq_interview_done(cb: CallbackQuery, state: FSMContext):
+    _touch(cb.message.chat.id, cb.from_user.id)
+    await cb.answer()
+    await _finish_interview(cb.message.bot, cb.message.chat.id, cb.from_user.id, state)
+
+
+@router.callback_query(StateFilter(Survey.interview), F.data == "i:skip")
+async def cq_interview_skip(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    await state.update_data(
+        history=(data.get("history") or []) + [{"role": "user", "content": "(пропущено)"}]
+    )
+    _touch(cb.message.chat.id, cb.from_user.id)
+    await cb.answer("Вопрос пропущен")
+    await _ask_question(cb.message.bot, cb.message.chat.id, cb.from_user.id, state)
+
+
+@router.message(StateFilter(Survey.interview), F.text & ~F.text.startswith("/"))
+async def ms_interview_answer(message: Message, state: FSMContext):
+    _touch(message.chat.id, message.from_user.id)
+    data = await state.get_data()
+    await state.update_data(
+        history=(data.get("history") or []) + [{"role": "user", "content": message.text}]
+    )
+    await _ask_question(message.bot, message.chat.id, message.from_user.id, state)
+
+
+@router.callback_query(StateFilter(Survey.profile), F.data == "i:ok")
+async def cq_profile_ok(cb: CallbackQuery, state: FSMContext):
+    """Профиль принят → LLM-подбор источников → валидация → мультивыбор."""
+    chat_id, user_id = cb.message.chat.id, cb.from_user.id
+    _touch(chat_id, user_id)
+    data = await state.get_data()
+    profile = data.get("interests_draft") or llm.DEFAULT_INTERESTS
+    placeholder = await cb.message.bot.send_message(
+        chat_id, "Подбираю источники по профилю — пара минут…")
+    candidates = await asyncio.to_thread(llm.suggest_sources, profile)
+    valid = await asyncio.to_thread(collect.validate_candidates, candidates) if candidates else []
+    _touch(chat_id, user_id)
+    await cb.answer()
+    if len(valid) < MIN_VALID_SOURCES:
+        log.warning("подбор chat=%s: %d валидных кандидатов — fallback", chat_id, len(valid))
+        await _fallback_pool(cb.message.bot, chat_id, state,
+                             "Подобрать не удалось — предлагаю базовый набор из каталога.")
+        await placeholder.delete()
+        return
+    await state.update_data(pool=valid, excluded=set(), src_page=0)
+    await state.set_state(Survey.sources)
+    await placeholder.edit_text(
+        _sources_text(valid, set()), reply_markup=keyboards.sources_kb(valid, set(), 0))
+
+
+@router.callback_query(StateFilter(Survey.profile), F.data == "i:fix")
+async def cq_profile_fix(cb: CallbackQuery, state: FSMContext):
+    """«Подправить» → ещё один уточняющий вопрос интервью."""
+    data = await state.get_data()
+    await state.update_data(
+        history=(data.get("history") or [])
+        + [{"role": "user", "content":
+            "(Читатель хочет подправить профиль. Задай один уточняющий вопрос.)"}],
+        rounds=interview.MAX_ROUNDS - 1,  # cap не режет уточняющий раунд
+    )
+    await state.set_state(Survey.interview)
+    _touch(cb.message.chat.id, cb.from_user.id)
+    await cb.answer()
+    await _ask_question(cb.message.bot, cb.message.chat.id, cb.from_user.id, state)
 
 
 # --- /start и вход в повторный опрос ----------------------------------------
@@ -114,11 +253,9 @@ async def cmd_start(message: Message, state: FSMContext):
         )
         return
     await asyncio.to_thread(db.ensure_user, conn, chat_id)
-    await state.update_data(mode="replace", topics=set())
-    await state.set_state(Survey.topics)
-    _touch(chat_id, message.from_user.id)
-    await message.answer(GREETING + "\n\n" + _topics_text(set()),
-                         reply_markup=keyboards.topics_kb(set()))
+    await state.update_data(**_fresh_data("replace"))
+    await message.answer(GREETING)
+    await _start_interview(message.bot, chat_id, message.from_user.id, state)
 
 
 @router.callback_query(F.data == "menu:resurvey")
@@ -139,13 +276,11 @@ async def cq_resurvey(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(Survey.rs_mode), F.data.startswith("r:"))
 async def cq_mode(cb: CallbackQuery, state: FSMContext):
     mode = cb.data.split(":", 1)[1]
-    await state.update_data(mode=mode, topics=set())
-    await state.set_state(Survey.topics)
+    await state.update_data(**_fresh_data(mode))
+    await cb.message.edit_text("Начнём интервью.")
     _touch(cb.message.chat.id, cb.from_user.id)
-    await cb.message.edit_text(
-        _topics_text(set()), reply_markup=keyboards.topics_kb(set())
-    )
     await cb.answer()
+    await _start_interview(cb.message.bot, cb.message.chat.id, cb.from_user.id, state)
 
 
 @router.callback_query(StateFilter(Survey.rs_mode), F.data == "c:cancel")
@@ -155,35 +290,7 @@ async def cq_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# --- шаг 1: темы ------------------------------------------------------------
-
-@router.callback_query(StateFilter(Survey.topics), F.data.startswith("t:"))
-async def cq_topic(cb: CallbackQuery, state: FSMContext):
-    value = cb.data[2:]
-    data = await state.get_data()
-    selected = set(data.get("topics") or [])
-    _touch(cb.message.chat.id, cb.from_user.id)
-    if value == "next":
-        pool = catalog.pick(selected)
-        await state.update_data(topics=sorted(selected), pool=pool, excluded=set())
-        await state.set_state(Survey.sources)
-        await cb.message.edit_text(
-            _sources_text(pool, set()), reply_markup=keyboards.sources_kb(pool, set())
-        )
-        await cb.answer()
-        return
-    if value in selected:
-        selected.discard(value)
-    else:
-        selected.add(value)
-    await state.update_data(topics=selected)
-    await cb.message.edit_text(
-        _topics_text(selected), reply_markup=keyboards.topics_kb(selected)
-    )
-    await cb.answer()
-
-
-# --- шаг 2: источники ---------------------------------------------------------
+# --- шаг 2: источники (мультивыбор, пагинация 11d/D46) --------------------------
 
 @router.callback_query(StateFilter(Survey.sources), F.data.startswith("s:"))
 async def cq_source(cb: CallbackQuery, state: FSMContext):
@@ -191,6 +298,7 @@ async def cq_source(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     pool = data.get("pool") or []
     excluded = set(data.get("excluded") or ())
+    page = int(data.get("src_page") or 0)
     _touch(cb.message.chat.id, cb.from_user.id)
     if value == "next":
         selected = [e for i, e in enumerate(pool) if i not in excluded]
@@ -200,6 +308,15 @@ async def cq_source(cb: CallbackQuery, state: FSMContext):
                                    reply_markup=keyboards.freq_kb())
         await cb.answer()
         return
+    if value.startswith("p:"):
+        page = int(value[2:])
+        await state.update_data(src_page=page)
+        await cb.message.edit_text(
+            _sources_text(pool, excluded, page),
+            reply_markup=keyboards.sources_kb(pool, excluded, page),
+        )
+        await cb.answer()
+        return
     idx = int(value)
     if idx in excluded:
         excluded.discard(idx)
@@ -207,7 +324,8 @@ async def cq_source(cb: CallbackQuery, state: FSMContext):
         excluded.add(idx)
     await state.update_data(excluded=excluded)
     await cb.message.edit_text(
-        _sources_text(pool, excluded), reply_markup=keyboards.sources_kb(pool, excluded)
+        _sources_text(pool, excluded, page),
+        reply_markup=keyboards.sources_kb(pool, excluded, page),
     )
     await cb.answer()
 
@@ -285,11 +403,14 @@ async def cq_save(cb: CallbackQuery, state: FSMContext):
     entries = data.get("selected") or []
     times = sorted(data.get("times") or [])
     mode = data.get("mode") or "replace"
+    interests = (data.get("interests_draft") or "").strip()
     chat_id = cb.message.chat.id
     try:
         await asyncio.to_thread(
             db.finalize_survey, conn, chat_id, entries, times, mode
         )
+        if interests:  # D45: профиль — в users.interests_text, дайджест его читает
+            await asyncio.to_thread(db.set_interests, conn, chat_id, interests)
     except Exception as exc:
         log.error("finalize_survey chat=%s: %s", chat_id, exc)
         await cb.answer("Ошибка сохранения — попробуйте ещё раз", show_alert=True)
@@ -302,27 +423,30 @@ async def cq_save(cb: CallbackQuery, state: FSMContext):
         reply_markup=keyboards.menu_kb(onboarded=True),
     )
     await cb.answer()
-    log.info("Онбординг chat=%s: %d источников, %s", chat_id, len(entries), times)
+    log.info("Онбординг chat=%s: %d источников, %s, профиль %d симв.",
+             chat_id, len(entries), times, len(interests))
 
 
 @router.callback_query(StateFilter(Survey.confirm), F.data == "c:restart")
 async def cq_restart(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(topics=set(), excluded=set(), times=[], freq=1)
-    await state.set_state(Survey.topics)
+    mode = data.get("mode") or "replace"
+    await state.update_data(**_fresh_data(mode))
+    await state.set_state(Survey.interview)
     _touch(cb.message.chat.id, cb.from_user.id)
-    await cb.message.edit_text(
-        _topics_text(set()), reply_markup=keyboards.topics_kb(set())
-    )
+    await cb.message.edit_text("Начнём заново.")
     await cb.answer()
+    await _start_interview(cb.message.bot, cb.message.chat.id, cb.from_user.id, state)
 
 
 # --- посторонний ввод внутри опроса --------------------------------------------
 
 # команды не перехватываем (план §1.3: любая команда сбрасывает состояние) —
-# они уходят в свои обработчики ниже по роутерам
-@router.message(StateFilter(Survey.rs_mode, Survey.topics, Survey.sources,
-                            Survey.freq, Survey.confirm), ~F.text.startswith("/"))
+# они уходят в свои обработчики ниже по роутерам; interview/time имеют
+# собственные текстовые хендлеры
+@router.message(StateFilter(Survey.rs_mode, Survey.sources,
+                            Survey.freq, Survey.confirm, Survey.profile),
+                ~F.text.startswith("/"))
 async def ms_foreign(message: Message, state: FSMContext):
     _touch(message.chat.id, message.from_user.id)
     await message.answer(

@@ -349,7 +349,7 @@ class TestDialogHandler(DialogCase):
 class TC41HappyPath(ChatCase):
     def test_onboarding_own_rss_scheduled_digest(self):
         from aiogram.fsm.storage.base import StorageKey
-        from bot import db, scheduler
+        from bot import collect, db, scheduler
 
         scheduler._state.clear()
         scheduler._retry.clear()
@@ -382,6 +382,9 @@ class TC41HappyPath(ChatCase):
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) FROM sources WHERE chat_id=%s AND origin='manual'",
             (self.CHAT,)).fetchone()[0], 1)
+
+        # фоновый сбор (11c/D44: prep не собирает — цикл collect_loop имитируем)
+        collect.collect_enabled(conn, self.CHAT)
 
         # 3. плановая сводка: слот через ~70 с (prep успевает по D25)
         slot = datetime.now() + timedelta(seconds=70)

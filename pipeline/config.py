@@ -29,9 +29,9 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4")
-LLM_MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+LLM_MODEL = os.environ.get("LLM_MODEL", "glm-5.3")
 
-MAX_ARTICLES_PER_FEED = 30
+MAX_ARTICLES_PER_FEED = 60
 
 DIGEST_TIMES = os.environ.get("DIGEST_TIMES", "09:00,21:00")
 

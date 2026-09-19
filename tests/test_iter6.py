@@ -270,7 +270,7 @@ class TC15TgwebMaster(ChatCase):
     def test_master_and_collect(self):
         self.press("add:start")
         self.press("a:k:tgweb")
-        self.assertIn("имя публичного канала", self.bot.edited_texts()[-1])
+        self.assertIn("@имя канала", self.bot.edited_texts()[-1])
         self.send("testch")  # имя канала → превью
         preview = self.bot.sent_texts()[-1]
         self.assertIn("t.me/testch", preview)

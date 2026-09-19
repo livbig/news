@@ -216,6 +216,13 @@ class ChatCase(unittest.TestCase):
             list(times), "replace",
         )
 
+    def collect_now(self):
+        """Сбор вынесен из prep в фоновый collect_loop (11c/D44) — в тестах
+        фоновый цикл имитируется явным вызовом перед слотами."""
+        from bot import collect
+
+        collect.collect_enabled(self.conn(), self.CHAT)
+
     def backdate_last_sent(self, hours):
         old = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
@@ -241,6 +248,7 @@ class TC24SettingsSlot(ChatCase):
             self.skipTest("граница суток — слот ушёл бы на завтра")
         slot_str = slot.strftime("%H:%M")
         self.onboard(times=("09:00",))
+        self.collect_now()  # фоновый сбор принёс элементы до слота
 
         # /settings → невалидный ввод не принимается, валидное время — да (TC-25 тут же)
         self.send("/settings")
@@ -267,7 +275,7 @@ class TC24SettingsSlot(ChatCase):
         # слот (+30 с): отправка одной записью — digests + digest_items + last_sent_at
         out, sent = self.slots_out(slot + timedelta(seconds=30))
         self.assertEqual(sent, [self.CHAT])
-        self.assertIn("Первая новость", out)  # элементы собраны в фазе подготовки
+        self.assertIn("Первая новость", out)  # элементы собраны фоновым циклом до слота
         self.assertEqual(self.digests_count(), 1)
         self.assertEqual(
             self.conn().execute(
@@ -300,11 +308,11 @@ class TC25InvalidTime(ChatCase):
         self.assertIn("Расписание обновлено", self.bot.edited_texts()[-1])
 
     def test_freq_text_instead_of_button(self):
-        """Шаг частоты онбординга: текст вместо кнопки — подсказка, FSM цел."""
-        self.send("/start")  # чат не onboarded → опрос
-        self.assertIn("Какие темы", self.bot.sent_texts()[-1])
-        self.press("t:next")  # темы → источники (дефолт)
-        self.press("s:next")  # источники → частота
+        """Шаг частоты онбординга: текст вместо кнопки — подсказка, FSM цел.
+        LLM выключена → интервью сразу даёт fallback-пул каталога (11d/D45)."""
+        self.send("/start")
+        self.assertIn("базовый набор", self.bot.sent_texts()[-1])
+        self.press("s:next")  # источники (fallback) → частота
         self.send("два раза в день")
         self.assertIn("Сейчас идёт опрос", self.bot.sent_texts()[-1])
         self.press("f:1")  # состояние частоты живо — кнопка принята
@@ -316,10 +324,11 @@ class TC25InvalidTime(ChatCase):
 class TC26NoNewItems(ChatCase):
     def test_only_new_in_digest(self):
         self.onboard(urls=[f"{BASE}/valid.xml", f"{BASE}/valid2.xml"])
+        self.collect_now()  # сбор принёс A(3) + B(2) до слота
         self.backdate_last_sent(30)
         now = datetime.now().astimezone() + timedelta(hours=2)
         now = now.replace(second=0, microsecond=0)
-        out, sent = self.slots_out(now)  # catch-up: сводка 1 — сбор принёс A(3) + B(2)
+        out, sent = self.slots_out(now)  # catch-up: сводка 1 — A(3) + B(2)
         self.assertEqual(sent, [self.CHAT])
         self.assertIn("Первая новость", out)
         self.assertIn("Другая новость", out)
@@ -380,6 +389,7 @@ class TC27EmptyPeriod(ChatCase):
 class TC28CatchUp(ChatCase):
     def test_one_digest_after_gap(self):
         self.onboard(urls=[f"{BASE}/valid.xml", f"{BASE}/valid2.xml"], times=("09:00", "21:00"))
+        self.collect_now()  # фоновый сбор до догоняющего тика
         self.backdate_last_sent(36)  # пропущено 2+ слота
         now = datetime.now().astimezone()
         upcoming = self.scheduler.next_slot(now, ["09:00", "21:00"])

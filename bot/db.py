@@ -15,13 +15,14 @@ from . import config
 # SQL в коде — на диалекте Postgres (%s, ON CONFLICT, RETURNING); для sqlite
 # _SqliteConn переписывает %s → ? (М2: движок выбирается по env, см. connect).
 
-# Схема — docs/plan.md §1.2 + П.2 (правки после сверки)
+# Схема — docs/plan.md §1.2 + П.2 (правки после сверки); interests_text — 11d/D45
 SCHEMA_SQLITE = """
 CREATE TABLE IF NOT EXISTS users (
   chat_id      INTEGER PRIMARY KEY,
   tz_offset_min INTEGER NOT NULL DEFAULT 180,
   send_times   TEXT NOT NULL DEFAULT '["09:00"]',
   last_sent_at TEXT,
+  interests_text TEXT,
   created_at   TEXT NOT NULL,
   onboarded_at TEXT
 );
@@ -80,6 +81,12 @@ CREATE TABLE IF NOT EXISTS fsm (
   data       TEXT,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS seen_hashes (
+  source_id INTEGER NOT NULL,
+  url_hash  TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_id, url_hash)
+);
 """
 
 # PG-вариант: AUTOINCREMENT → IDENTITY, datetime('now') → to_char(now()) ISO Z.
@@ -89,6 +96,7 @@ CREATE TABLE IF NOT EXISTS users (
   tz_offset_min INTEGER NOT NULL DEFAULT 180,
   send_times   TEXT NOT NULL DEFAULT '["09:00"]',
   last_sent_at TEXT,
+  interests_text TEXT,
   created_at   TEXT NOT NULL,
   onboarded_at TEXT
 );
@@ -147,6 +155,12 @@ CREATE TABLE IF NOT EXISTS fsm (
   state      TEXT,
   data       TEXT,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS seen_hashes (
+  source_id INTEGER NOT NULL,
+  url_hash  TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (source_id, url_hash)
 );
 """
 
@@ -245,6 +259,15 @@ def _run_schema(conn, schema):
             conn.execute(stmt)
 
 
+def _migrate(conn) -> None:
+    """Идемпотентные миграции поверх свежей схемы (11d/D45: interests_text —
+    колонка отсутствует только у БД, созданных до iter-11d)."""
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN interests_text TEXT")
+    except (sqlite3.OperationalError, pg_errors.DuplicateColumn):
+        pass  # колонка уже есть (SCHEMA_* для свежих БД или прошлый запуск)
+
+
 def connect(path=None):
     """Выбор движка: BOT_DB_PATH/файл → sqlite; SUPABASE_DB_URL → PG;
     ':memory:' (тесты) → PG во временной схеме, если задан BOT_TEST_PG_URL."""
@@ -254,16 +277,19 @@ def connect(path=None):
         conn.execute(f'CREATE SCHEMA "{schema}"')
         conn.execute(f'SET search_path TO "{schema}"')
         _run_schema(conn, SCHEMA_PG)
+        _migrate(conn)
         return conn
     if path is None and config.SUPABASE_DB_URL and not os.environ.get("BOT_DB_PATH"):
         conn = _pg_connect(config.SUPABASE_DB_URL)
         _run_schema(conn, SCHEMA_PG)
+        _migrate(conn)
         return conn
     # check_same_thread=False: хендлеры зовут БД через asyncio.to_thread (последовательно)
     conn = sqlite3.connect(path or config.DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQLITE)
+    _migrate(conn)
     return _SqliteConn(conn)
 
 
@@ -307,11 +333,20 @@ def minus_iso(now: str, hours: int) -> str:
 
 
 def insert_item(conn, source_id, url, title, published) -> bool:
+    """Вставка элемента с дедупом UNIQUE(source_id, url_hash) (R5/D19) и
+    надгробием seen_hashes (11e/D47): удалённая по retention запись фида
+    не вставляется повторно — False (как дубль)."""
+    digest = url_hash(url, title)
+    if conn.execute(
+        "SELECT 1 FROM seen_hashes WHERE source_id=%s AND url_hash=%s",
+        (source_id, digest),
+    ).fetchone():
+        return False
     try:
         conn.execute(
             "INSERT INTO items (source_id, url, title, published, fetched_at, url_hash)"
             " VALUES (%s, %s, %s, %s, %s, %s)",
-            (source_id, url, title, published or now_iso(), now_iso(), url_hash(url, title)),
+            (source_id, url, title, published or now_iso(), now_iso(), digest),
         )
         return True
     except (sqlite3.IntegrityError, pg_errors.UniqueViolation):
@@ -352,11 +387,22 @@ def is_onboarded(conn, chat_id) -> bool:
     return bool(row and row[0])
 
 
+def source_count(conn, chat_id) -> int:
+    """Число источников чата (проверка BOT_MAX_SOURCES, 11d/D46)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM sources WHERE chat_id=%s", (chat_id,)
+    ).fetchone()[0]
+
+
 def finalize_survey(conn, chat_id, entries, times, mode) -> None:
-    """Финализация опроса (D22). replace — удалить прошлые survey-источники;
-    add — объединение без дублей по UNIQUE(chat_id, kind, url).
+    """Финализация опроса (D22, 11d/D45-D46): entries = {title, kind, url,
+    topics?}; kind каждого entry — параметр (было жёстко 'rss'). replace —
+    удалить прошлые survey-источники; add — объединение без дублей по
+    UNIQUE(chat_id, kind, url). Лимит BOT_MAX_SOURCES на чат — ValueError.
     last_sent_at не трогаем (окно не сбрасывается, сценарии 6.2/6.3)."""
     now = now_iso()
+    if source_count(conn, chat_id) + len(entries) > config.MAX_SOURCES:
+        raise ValueError(f"достигнут лимит источников ({config.MAX_SOURCES})")
     conn.execute(
         "INSERT INTO users (chat_id, created_at) VALUES (%s, %s)"
         " ON CONFLICT (chat_id) DO NOTHING",
@@ -367,9 +413,13 @@ def finalize_survey(conn, chat_id, entries, times, mode) -> None:
     executemany(
         conn,
         "INSERT INTO sources (chat_id, kind, url, title, topics, origin, added_at)"
-        " VALUES (%s, 'rss', %s, %s, %s, 'survey', %s)"
+        " VALUES (%s, %s, %s, %s, %s, 'survey', %s)"
         " ON CONFLICT (chat_id, kind, url) DO NOTHING",
-        [(chat_id, e["url"], e["title"], json.dumps(e.get("topics", [])), now) for e in entries],
+        [
+            (chat_id, e.get("kind", "rss"), e["url"], e["title"],
+             json.dumps(e.get("topics", [])), now)
+            for e in entries
+        ],
     )
     conn.execute(
         "UPDATE users SET send_times=%s, onboarded_at=COALESCE(onboarded_at, %s) WHERE chat_id=%s",
@@ -387,7 +437,10 @@ def list_sources(conn, chat_id) -> list:
 
 
 def add_source(conn, chat_id, kind, url, title, origin="manual", topics=None):
-    """Добавить источник (FR-04/FR-05). None — уже есть (UNIQUE chat_id,kind,url)."""
+    """Добавить источник (FR-04/FR-05). None — уже есть (UNIQUE chat_id,kind,url);
+    'limit' — достигнут BOT_MAX_SOURCES на чат (11d/D46)."""
+    if source_count(conn, chat_id) >= config.MAX_SOURCES:
+        return "limit"
     conn.execute(
         "INSERT INTO users (chat_id, created_at) VALUES (%s, %s)"
         " ON CONFLICT (chat_id) DO NOTHING",
@@ -460,19 +513,46 @@ def user_settings(conn, chat_id):
 
 # --- И4: окно дельты (D26) и расписание (FR-10..FR-12) ------------------------
 
-def pending_items(conn, chat_id, limit=50) -> list:
+def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
     """Непотреблённые элементы чата: не входившие ни в одну сводку чата
     (digest_items). published не фильтрует окно (даты фидов ненадёжны,
-    D26) — только сортировка, свежие первыми."""
+    D26) — только сортировка, свежие первыми. iter-11b: плоский LIMIT 50
+    заменён per-source бюджетом (BOT_DIGEST_PER_SOURCE) + общим капом
+    (BOT_DIGEST_MAX_ITEMS) — «болтливый» фид не съедает дайджест."""
+    per_source = per_source if per_source is not None else config.DIGEST_PER_SOURCE
+    limit = limit if limit is not None else config.DIGEST_MAX_ITEMS
     return conn.execute(
-        "SELECT i.id, i.title, i.url FROM items i"
-        " JOIN sources s ON s.id = i.source_id"
-        " WHERE s.chat_id=%s AND NOT EXISTS ("
-        "   SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
-        "   WHERE di.item_id=i.id AND d.chat_id=%s)"
-        " ORDER BY i.published DESC, i.id DESC LIMIT %s",
-        (chat_id, chat_id, limit),
+        "SELECT id, title, url FROM ("
+        "  SELECT i.id, i.title, i.url, i.published,"
+        "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
+        "                            ORDER BY i.published DESC, i.id DESC) AS rn"
+        "  FROM items i JOIN sources s ON s.id = i.source_id"
+        "  WHERE s.chat_id=%s AND NOT EXISTS ("
+        "    SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
+        "    WHERE di.item_id=i.id AND d.chat_id=%s)"
+        ") t WHERE rn <= %s ORDER BY published DESC, id DESC LIMIT %s",
+        (chat_id, chat_id, per_source, limit),
     ).fetchall()
+
+
+def get_interests(conn, chat_id) -> str | None:
+    """Профиль интересов чата (users.interests_text, 11d); колонки/строки
+    ещё нет (до миграции 11d) → None → дефолт-профиль дайджеста."""
+    try:
+        row = conn.execute(
+            "SELECT interests_text FROM users WHERE chat_id=%s", (chat_id,)
+        ).fetchone()
+    except (sqlite3.OperationalError, pg_errors.UndefinedColumn):
+        return None
+    return (row[0] or None) if row else None
+
+
+def set_interests(conn, chat_id, text: str) -> None:
+    """Сохранить профиль интересов (11d: cq_save пишет, digest читает)."""
+    conn.execute(
+        "UPDATE users SET interests_text=%s WHERE chat_id=%s", (text, chat_id)
+    )
+    conn.commit()
 
 
 def record_digest(conn, chat_id, message_text, item_ids, now=None) -> int | None:
@@ -566,3 +646,35 @@ def news_context(conn, chat_id, limit=120) -> str:
         (chat_id, limit),
     ).fetchall()
     return "\n".join(f"{r['title']} — {r['url']}" for r in rows)
+
+
+# --- 11e: retention (D47) --------------------------------------------------------
+
+def cleanup(conn, now=None) -> dict:
+    """Retention (D47): items старше BOT_RETENTION_ITEMS_DAYS → надгробия
+    seen_hashes (без FK — переживают пере-добавление источника), затем
+    удаление; digests (каскад digest_items), chat_history и сами надгробия —
+    старше BOT_RETENTION_DAYS. Возвращает счётчики для лога."""
+    moment = now or now_iso()
+    cutoff_items = minus_iso(moment, 24 * config.RETENTION_ITEMS_DAYS)
+    cutoff_days = minus_iso(moment, 24 * config.RETENTION_DAYS)
+    counts = {}
+    conn.execute(
+        "INSERT INTO seen_hashes (source_id, url_hash, created_at)"
+        " SELECT source_id, url_hash, %s FROM ("
+        "  SELECT source_id, url_hash FROM items WHERE fetched_at < %s"
+        ") t WHERE true ON CONFLICT DO NOTHING",
+        (moment, cutoff_items),
+    )
+    cur = conn.execute("DELETE FROM items WHERE fetched_at < %s", (cutoff_items,))
+    counts["items_deleted"] = max(cur.rowcount or 0, 0)  # fetched_at, не created_at
+    counts["digests_deleted"] = _delete_count(conn, "digests", cutoff_days)
+    counts["chat_history_deleted"] = _delete_count(conn, "chat_history", cutoff_days)
+    counts["seen_hashes_deleted"] = _delete_count(conn, "seen_hashes", cutoff_days)
+    conn.commit()
+    return counts
+
+
+def _delete_count(conn, table: str, cutoff: str) -> int:
+    cur = conn.execute(f"DELETE FROM {table} WHERE created_at < %s", (cutoff,))
+    return max(cur.rowcount or 0, 0)

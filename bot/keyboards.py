@@ -1,41 +1,63 @@
-"""Inline-клавиатуры бота. Отметка выбора — префикс «✓ » в тексте кнопки."""
+"""Inline-клавиатуры бота. Отметка выбора — префикс «✓ » в тексте кнопки.
+Пагинация (11d/D46): пулы >30 — страницы по 30 (лимит Telegram ~100 кнопок)."""
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from . import catalog
-from .catalog import TOPIC_LABELS
-
 TIME_PRESETS = ["09:00", "21:00", "12:00", "18:00"]
+
+PAGE_SIZE = 30
 
 
 def _grid(buttons, columns=2):
     return [buttons[i : i + columns] for i in range(0, len(buttons), columns)]
 
 
-def topics_kb(selected) -> InlineKeyboardMarkup:
-    buttons = [
-        InlineKeyboardButton(
-            text=("✓ " if topic in selected else "") + TOPIC_LABELS[topic],
-            callback_data=f"t:{topic}",
-        )
-        for topic in catalog.TOPIC_PRIORITY
-    ]
-    rows = _grid(buttons)
-    rows.append([InlineKeyboardButton(text="Далее", callback_data="t:next")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def sources_kb(pool, excluded) -> InlineKeyboardMarkup:
+def sources_kb(pool, excluded, page=0) -> InlineKeyboardMarkup:
+    """Мультивыбор источников онбординга; page — глобальные индексы пула."""
+    chunk = pool[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
     rows = [
         [
             InlineKeyboardButton(
-                text=("" if i in excluded else "✓ ") + e["title"],
-                callback_data=f"s:{i}",
+                text=("" if page * PAGE_SIZE + j in excluded else "✓ ") + e["title"][:60],
+                callback_data=f"s:{page * PAGE_SIZE + j}",
             )
         ]
-        for i, e in enumerate(pool)
+        for j, e in enumerate(chunk)
     ]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹ Назад", callback_data=f"s:p:{page - 1}"))
+    if (page + 1) * PAGE_SIZE < len(pool):
+        nav.append(InlineKeyboardButton(
+            text=f"Ещё › ({len(pool) - (page + 1) * PAGE_SIZE})",
+            callback_data=f"s:p:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text="Далее", callback_data="s:next")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def interview_kb() -> InlineKeyboardMarkup:
+    """Кнопки у каждого вопроса интервью (11d/D45)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Достаточно", callback_data="i:done"),
+                InlineKeyboardButton(text="Пропустить вопрос", callback_data="i:skip"),
+            ]
+        ]
+    )
+
+
+def profile_kb() -> InlineKeyboardMarkup:
+    """Черновик профиля интересов: подправить или принять (11d/D45)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Верно", callback_data="i:ok"),
+                InlineKeyboardButton(text="Подправить", callback_data="i:fix"),
+            ]
+        ]
+    )
 
 
 def freq_kb() -> InlineKeyboardMarkup:
@@ -114,17 +136,28 @@ def kind_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def sources_manage_kb(rows) -> InlineKeyboardMarkup:
+def sources_manage_kb(rows, page=0) -> InlineKeyboardMarkup:
     """CRUD-список: строки list_sources (id, title, kind, url, origin, enabled,
-    status, status_msg) → вкл/выкл + удаление каждого + навигация (FR-04)."""
+    status, status_msg) → вкл/выкл + удаление каждого + навигация (FR-04);
+    50+ источников — пагинация по PAGE_SIZE (11d/D46)."""
+    chunk = rows[page * PAGE_SIZE : (page + 1) * PAGE_SIZE]
     kb = []
-    for sid, title, kind, url, origin, enabled, status, status_msg in rows:
+    for sid, title, kind, url, origin, enabled, status, status_msg in chunk:
         kb.append([
             InlineKeyboardButton(
                 text=("⏸ " if enabled else "▶ ") + title[:24], callback_data=f"src:t:{sid}"
             ),
             InlineKeyboardButton(text="✕", callback_data=f"src:d:{sid}"),
         ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="‹ Назад", callback_data=f"src:pg:{page - 1}"))
+    if (page + 1) * PAGE_SIZE < len(rows):
+        nav.append(InlineKeyboardButton(
+            text=f"Ещё › ({len(rows) - (page + 1) * PAGE_SIZE})",
+            callback_data=f"src:pg:{page + 1}"))
+    if nav:
+        kb.append(nav)
     kb.append([InlineKeyboardButton(text="➕ Добавить источник", callback_data="add:start")])
     kb.append([InlineKeyboardButton(text="Пройти опрос заново", callback_data="menu:resurvey")])
     kb.append([InlineKeyboardButton(text="В меню", callback_data="menu:main")])

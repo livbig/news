@@ -29,3 +29,18 @@ REDDIT_RSS_TEMPLATE = os.environ.get(
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 # М2: PG для тестов ':memory:' (локальный docker / CI service container).
 TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")
+
+# iter-11b (D42/D43): объём входа дайджеста — per-source бюджет + общий кап
+DIGEST_PER_SOURCE = int(os.environ.get("BOT_DIGEST_PER_SOURCE", "15"))
+DIGEST_MAX_ITEMS = int(os.environ.get("BOT_DIGEST_MAX_ITEMS", "800"))
+
+# iter-11c (D44): непрерывный фоновый сбор — интервал и пул воркеров
+COLLECT_INTERVAL = int(os.environ.get("BOT_COLLECT_INTERVAL", "1800"))
+COLLECT_WORKERS = int(os.environ.get("BOT_COLLECT_WORKERS", "6"))
+
+# iter-11d (D46): лимит источников на чат снят до 100
+MAX_SOURCES = int(os.environ.get("BOT_MAX_SOURCES", "100"))
+
+# iter-11e (D47): retention — окна хранения
+RETENTION_ITEMS_DAYS = int(os.environ.get("BOT_RETENTION_ITEMS_DAYS", "10"))
+RETENTION_DAYS = int(os.environ.get("BOT_RETENTION_DAYS", "30"))

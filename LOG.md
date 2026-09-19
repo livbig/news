@@ -3,6 +3,134 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-15 — iter-11e (D47): retention — seen_hashes, окна 10/30 дней
+
+- **Схема** (обе SCHEMA_*): `seen_hashes (source_id, url_hash, created_at,
+  PK(source_id, url_hash))` — БЕЗ FK, переживает удаление/пере-добавление
+  источника.
+- **insert_item**: перед вставкой SELECT по seen_hashes — надгробие
+  блокирует повторную вставку старой записи фида (False, как дубль).
+- **db.cleanup(conn, now=None)**: items старше BOT_RETENTION_ITEMS_DAYS=10 →
+  INSERT…SELECT…WHERE true…ON CONFLICT DO NOTHING в seen_hashes
+  (WHERE true — требование грамматики sqlite; PG принимает то же), затем
+  DELETE; digests (каскад digest_items), chat_history, seen_hashes старше
+  BOT_RETENTION_DAYS=30. Счётчики — в лог (`items_deleted`,
+  `digests_deleted`, `chat_history_deleted`, `seen_hashes_deleted`).
+- **Циклы**: `scheduler.retention_loop` — каждые
+  BOT_RETENTION_INTERVAL=6 ч с heal-PG как collect_loop; один прогон на
+  старте `bot/__main__.py::main()` (до mock-режима и поллинга).
+- **Тесты**: +3 (старые items → надгробия + удаление, повторная вставка
+  отбита; digests/chat_history/seen_hashes 40-дневные удалены, свежие не
+  тронуты; retention_once возвращает счётчики). Прогон 114/114 sqlite +
+  114/114 PG.
+
+## 2026-09-15 — iter-11d (D45/D46): онбординг-интервью, LLM-подбор источников, лимиты
+
+- **Схема**: `users.interests_text TEXT` — в обе SCHEMA_* для свежих БД +
+  идемпотентная миграция `db._migrate` (ALTER TABLE … ADD COLUMN,
+  try/except duplicate-column) в `db.connect()`; прод-Supabase мигрирует
+  сам, ручных шагов нет. `get_interests` толерантен к старой схеме.
+- **Онбординг = LLM-интервью** (новый `bot/interview.py`, промпты
+  дословно из плана): `next_question(history)` — один вопрос за раунд,
+  «ГОТОВО»/сбой → None; `build_profile(history)` — компактный профиль
+  (≤500 симв.). FSM-флоу: Survey.interview → profile («Верно»/«Подправить»)
+  → sources → freq → time → confirm; история Q/A в FSM data; кнопки
+  «Достаточно»/«Пропустить» у каждого вопроса; cap 8 раундов (клиентский,
+  «Подправить» даёт уточняющий раунд); `_touch` на каждом раунде — sweeper
+  (600 с) интервью не рвёт. Шаг тем (topics_kb) удалён; состояния
+  rs_mode/…/confirm сохранены, нумерация 1/5…5/5.
+- **Подбор источников**: `llm.suggest_sources(profile)` (промпт §4, строгий
+  JSON, regex-извлечение, фильтр title/kind/url, kinds rss/tgweb/html,
+  кап 60; без ключа/сбой → []) + `collect.validate_candidates`
+  (make_preview каждого: rss/html пул 4 воркера, tgweb последовательно;
+  мёртвые отсекаются с логом). <15 валидных → «Подобрать не удалось» +
+  fallback-пул = весь каталог (LLM недоступна на старте интервью — сразу
+  fallback с дефолт-профилем). `cq_save` пишет `users.interests_text`.
+- **Лимиты/пагинация (D46)**: `BOT_MAX_SOURCES=100` — проверка в
+  `finalize_survey` (ValueError) и `add_source` (возвращает 'limit' →
+  alert в мастере); `finalize_survey` пишет kind каждого entry (было
+  жёстко 'rss'). `keyboards.sources_kb` и `sources_manage_kb` — страницы
+  по 30 (навигация ‹/Ещё›, глобальные индексы пула, страница CRUD-списка
+  на чат в sources._pages). catalog: TOPIC_*/PICK_LIMIT удалены,
+  `pick()` = весь файл.
+- **Тесты**: +13 (suggest JSON/фильтр/кап/без-ключа; валидация отсеивает
+  мёртвые rss+tgweb; finalize kind=tgweb; лимит 2→'limit'+ValueError;
+  interests roundtrip; пагинация обеих клавиатур; полное интервью с
+  fake-LLM до сохранения профиля и 21 источника; fallback при <15 и при
+  выключенной LLM на старте; «Подправить»; профиль в промпте дайджеста).
+  TC-01/02/10, TC-25 обновлены под новую архитектуру; FakeBot теперь
+  возвращает _SentMessage из send_message (edit_text/delete для
+  placeholder). 111/111 sqlite + 111/111 PG.
+
+## 2026-09-15 — iter-11c (D44): непрерывный сбор, prep = только LLM
+
+- **collect_enabled** переписан на параллель: rss/html/twitter — пул
+  `ThreadPoolExecutor(BOT_COLLECT_WORKERS=6)`, tgweb — строго последовательно
+  после пула (паузы между каналами сохранены, FR-07). Вызовы БД из воркеров
+  сериализует `_LockedConn` (прокси execute/executemany/commit под Lock;
+  sqlite check_same_thread=False уже разрешал чужие потоки, PG autocommit
+  не терпит параллельных команд — единый лок). Изоляция отказов и
+  статусы error/degraded — как были (NFR-02/D3).
+- **scheduler.collect_loop/collect_once**: фоновый цикл каждые
+  `BOT_COLLECT_INTERVAL=1800 c` собирает все включённые источники всех
+  onboarded-чатов (первый тик сразу на старте); heal-PG `db.reconnect` по
+  образцу slots_loop (коннект пересоздаётся, `onboarding.conn` обновляется).
+  Запуск/останов — в `handlers.run()` рядом со slots_loop.
+- **_prepare больше не собирает**: фаза подготовки = только
+  `digest.build_delta` (LLM/mock); prep ускоряется, точность слота (FR-10)
+  растёт, футер деградации у плановых сводок исчез (сбор с ними больше не
+  связан; /digest и «сводка сейчас» собирают по-прежнему). Футер-функции не
+  тронуты. `MAX_ARTICLES_PER_FEED` 30 → 60.
+- **Тесты**: +5 (параллельный сбор = ожидаемое множество items, мёртвый фид
+  изолирован в пуле, tgweb не в пуле, collect_once только onboarded-чаты,
+  _prepare не дёргает collect — boom-мок; MAX_ARTICLES=60). Тесты слотов
+  (TC-24/26/28, TC-41) обновлены: фоновый сбор имитируется явным
+  collect_enabled перед слотами. 96/96 sqlite + 96/96 PG.
+
+## 2026-09-15 — iter-11b (D41-D43): GLM-5.3, согласованный mega-промпт, объём
+
+- **Модель**: тестовый вызов `_call` с `LLM_MODEL=glm-5.3` — Z.ai
+  (anthropic-совместимый /v1/messages) принимает ID флагмана; дефолт
+  `pipeline/config.py` и `.env` = glm-5.3 (D41 зафиксирован, контекст 1М —
+  вход не урезаем).
+- **Промпт**: `bot/llm.py::SYSTEM_PROMPT` заменён на согласованный дословно
+  (план §Промпты): личный аналитик, метод 1-5, эмодзи-ссылка на
+  первоисточник у каждого пункта, «Синтез» + «На радаре», целевой объём
+  12000-16000 симв. Подстановка `{INTERESTS_PROFILE}` — через replace;
+  `DEFAULT_INTERESTS` = приоритеты пользователя (до интервью 11d).
+  `summarize(items_text, interests=None)`: None/пустой → дефолт.
+- **Объём**: `MAX_TOKENS = 32000` (env `LLM_MAX_TOKENS`); build_delta
+  оборачивает вход в `<новости>…</новости>` (строки «заголовок — URL»);
+  `tgsend` ≤4000 не тронут (3-4 сообщения формируются им же).
+- **pending_items**: плоский LIMIT 50 → window-функция ROW_NUMBER:
+  per-source бюджет `BOT_DIGEST_PER_SOURCE=15` + общий кап
+  `BOT_DIGEST_MAX_ITEMS=800` (bot/config.py); работает на sqlite и PG
+  (ROW_NUMBER с 3.25+). `build_delta` читает профиль
+  (`db.get_interests` — толерантно к отсутствию колонки до миграции 11d;
+  `db.set_interests` заготовлен).
+- **Тесты**: +8 (профиль в промпте/дефолт/контракт-маркеры, MAX_TOKENS env
+  через reload, per-source бюджет 30→15, глобальный кап, окно потребления,
+  обёртка <новости> + экранирование); TC-29 обновлён под новый контракт
+  промпта. 91/91 sqlite + 91/91 PG.
+
+## 2026-09-15 — iter-11a (D48): добавление TG-каналов починено
+
+- **Диф**: `collect.tg_name` принимает @имя, имя, t.me/имя, t.me/s/имя,
+  telegram.me|dog, ссылки на пост (t.me/имя/5); query и трейлинг «/» срезаются;
+  реплай-ссылки (t.me/+…, /joinchat) — отдельная ошибка `TgInviteError` →
+  в мастере «Это ссылка-приглашение в приватный канал…» (не общая «не похоже
+  на имя»); любой провал валидации логируется с repr (невидимые символы).
+  `KIND_PROMPTS["tgweb"]` переписан: @имя / t.me/имя / перешлите пост канала.
+- **Форвард-хендлер** (`sources.ms_forward`, состояние AddSource.url):
+  пересланный пост публичного канала (`forward_origin` = MessageOriginChannel
+  с chat.username) → превью и добавление как tgweb независимо от выбранного
+  типа; форвард без username / от пользователя — понятная ошибка. Общий хвост
+  мастера вынесен в `_preview` (текст и форвард — один путь).
+- **Тесты**: новые 10 в tests/test_iter11.py (форматы tg_name, invite-маркер,
+  лог repr, форвард-канал → превью → source kind=tgweb, форварды без username/
+  от юзера отклонены, invite текстом). Регрессия test_iter6 TC15 обновлена
+  под новый промпт. 82/82 sqlite + 82/82 PG.
+
 ## 2026-09-15 — фикс: автовосстановление PG-соединения после обрыва сети
 
 - **Инцидент**: обрыв сети на Mac в 22:33 (SSL SYSCALL / «Can't assign

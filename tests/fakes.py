@@ -16,6 +16,32 @@ def shared_dispatcher() -> Dispatcher:
     return build_dispatcher()  # М4: единый синглтон на процесс (роутеры одни)
 
 
+class _SentMessage:
+    """Возврат bot.send_message: достаточно для хендлеров, вызывающих
+    .edit_text/.delete у отправленного сообщения (11d: placeholder подбора)."""
+
+    def __init__(self, bot, chat_id, message_id):
+        self._bot = bot
+        self.chat = Chat(id=chat_id, type="private")
+        self.message_id = message_id
+
+    async def edit_text(self, text, reply_markup=None):
+        from aiogram.methods import EditMessageText
+
+        await self._bot(EditMessageText(
+            chat_id=self.chat.id, message_id=self.message_id,
+            text=text, reply_markup=reply_markup,
+        ))
+        return True
+
+    async def delete(self):
+        from aiogram.methods import DeleteMessage
+
+        await self._bot(DeleteMessage(
+            chat_id=self.chat.id, message_id=self.message_id))
+        return True
+
+
 class FakeBot(Bot):
     """Перехват Telegram-методов на уровне bot.__call__ — сеть не трогаем."""
 
@@ -25,6 +51,8 @@ class FakeBot(Bot):
 
     async def __call__(self, method, request_timeout=None):
         self.calls.append((type(method).__name__, method.model_dump(exclude_none=True)))
+        if type(method).__name__ == "SendMessage":
+            return _SentMessage(self, method.chat_id, 1000 + len(self.calls))
         return True
 
     def sent_texts(self):
