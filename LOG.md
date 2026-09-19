@@ -23,6 +23,11 @@
   отбита; digests/chat_history/seen_hashes 40-дневные удалены, свежие не
   тронуты; retention_once возвращает счётчики). Прогон 114/114 sqlite +
   114/114 PG.
+- **Публикация**: iter-11a…11e запушены в livbig/news (orphan-снапшот →
+  origin main, скан идентификаторов чистый) → GH Action deploy пересоберёт
+  HF Space. ВАЖНО для прода: секрет/вар `LLM_MODEL` в Space должен быть
+  `glm-5.3` (env сильнее дефолта кода); новые env (collect/digest/retention)
+  имеют кодовые дефолты — задавать в Space не обязательно.
 
 ## 2026-09-15 — iter-11d (D45/D46): онбординг-интервью, LLM-подбор источников, лимиты
 
