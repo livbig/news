@@ -30,8 +30,9 @@ TELEGRAM_CHAT_ID; мультипользовательность отклоне�
   digests/chat_history/seen_hashes — BOT_RETENTION_DAYS=30 дней; проход
   каждые 6 ч + на старте (`scheduler.retention_loop`).
 - **Лимит источников**: BOT_MAX_SOURCES=100 на чат (D46).
-- Следующая фаза (вне iter-11): миграция хостинга на Raspberry Pi —
-  отдельный план (VPN full-tunnel, `BOT_IP_PIN=0`, systemd).
+- Миграция хостинга на Raspberry Pi выполнена 2026-09-19 (iter-12; план
+  `.kilo/plans/1789833048288-raspberry-pi-migration-plan.md`; решения D49–D55) —
+  см. «Прод-хостинг: Raspberry Pi».
 
 ## Команды
 
@@ -66,40 +67,57 @@ TELEGRAM_CHAT_ID; мультипользовательность отклоне�
 - Перед каждым пушем — скан снапшота на идентификаторы (chat_id, @usernames,
   /Users/, токен-паттерны): `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
 
-## Прод-хостинг: HF Space (с 2026-09-14/15; Mac — откат)
+## Прод-хостинг: Raspberry Pi (с 2026-09-19; iter-12)
 
-- Прод: Hugging Face Space `<user>/news` (приватный, sdk: docker, app_port
-  7860). Процесс тот же: `python3 -m bot` (Dockerfile, TZ=Europe/Moscow).
-  Состояние — только Supabase; локальные файлы контейнера эфемерны.
-- Автодеплой: push в origin main (публичный снапшот) → GH Action `deploy`
-  → upload_folder в Space → пересборка. Логи: Space → Logs (только владелец).
-- Секреты/vars Space: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, LLM_API_KEY,
-  LLM_BASE_URL, LLM_MODEL, SUPABASE_DB_URL, TZ=Europe/Moscow,
-  BOT_HEALTH_PORT=7860, BOT_IP_PIN=0 (облаку пиннинг не нужен; по умолчанию
-  на Mac включён). GH secrets: HF_TOKEN; GH vars: HF_REPO_ID, HF_SPACE_HOST.
-- Keep-alive: GH Action `keepalive` (cron */20) пингует /health с HF_TOKEN —
-  приватный Space на free засыпает через 48 ч без HTTP-входящего. /health —
-  тред в bot/__main__ (BOT_HEALTH_PORT); без живого порта Space рестартует
-  контейнер по кругу.
-- Рестарт Space: Settings → Factory reboot (или pause/resume). Рестарты
-  безопасны: catch-up дошлёт пропущенную сводку (FR-12), FSM-диалоги
-  сбросятся (как и на Mac).
-- Откат на Mac (cold standby): plist сохранён. Порядок: Space → Settings →
-  Pause Space (ЕДИНСТВЕННЫЙ getUpdates, иначе 409) →
-  `launchctl enable gui/501/com.fifth.newsbot` (если был disabled) →
+- Прод: Raspberry Pi 4 в LAN, SSH `minibrick@192.168.88.73` (ключ ed25519 с
+  Mac; DHCP может сменить IP — при недоступности пересканировать: ping-свип /24
+  + `arp -a`, фильтр MAC-вендоров `dc:a6:32` и др.). Пользователь ОС —
+  `minibrick` (D54 переопределено пользователем: имя/hostname НЕ менялись),
+  hostname `minibrick`; sudo — NOPASSWD (`/etc/sudoers.d/010_pi-nopasswd`).
+- Юниты systemd (Pi): `awg0.service` — AmneziaWG full-tunnel, userspace
+  `awg-go` (v3.1.20260828, собран из github.com/amnezia-vpn, бинарник
+  `/usr/local/bin/awg-go`; repo.amnezia.org из РФ недоступен — apt-репозиторий
+  не использовался), `Restart=always`, конфиг `/etc/amnezia/amneziawg/awg0.conf`
+  (секреты! из `vpn.conf` Mac), kill-switch — nft-таблица `inet awgks`
+  (`awgks.nft` рядом; endpoint 195.58.46.21:9987 захардкожен в правила — при
+  смене endpoint править и конфиг, и nft), скрипты
+  `awg0-configure.sh`/`awg0-deconfigure.sh`; и `newsbot.service` —
+  `Requires=awg0.service`, `User=minibrick`,
+  `WorkingDirectory=/home/minibrick/news`, venv, `BOT_IP_PIN=0`,
+  `TZ=Europe/Moscow`, `Restart=always`.
+- Код на Pi: `/home/minibrick/news/` (bot/, pipeline/, tests/, venv/, `.env` —
+  ТОЛЬКО чистые `KEY=VALUE`, inline-комментарии load_env не срезает).
+  Обновление: с Mac
+  `rsync -a --exclude='__pycache__' -e ssh bot pipeline requirements.txt .env minibrick@192.168.88.73:news/`
+  → `sudo systemctl restart newsbot`.
+- Логи: journald (`journalctl -u newsbot -f`, `-u awg0`) + `~/news/logs/run.log`;
+  ротация `/etc/logrotate.d/newsbot` (weekly, rotate 4, compress — SD-карта).
+- Kill-switch: при поднятом туннеле весь не-LAN/не-tunnel трафик дропается
+  (nft); краш awg-go → интерфейс исчезает, правила остаются, трафик НЕ утекает
+  в домашний IP (проверено kill -9: блокировка до автоперезапуска ~5 c).
+- Регрессия на Pi: `cd ~/news && BOT_TEST_PG_URL= venv/bin/python -m unittest
+  discover -s tests` → 114/114 (2026-09-19); PG-смоук через туннель — OK.
+- Откат на Mac (cold standby): plist `com.fifth.newsbot` сохранён, launchd
+  disabled. Порядок: на Pi `sudo systemctl stop --now newsbot` (ЕДИНСТВЕННЫЙ
+  getUpdates) → на Mac `launchctl enable gui/501/com.fifth.newsbot` →
   `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`.
-  Возврат на Space: `launchctl bootout gui/501/com.fifth.newsbot` +
-  `launchctl disable gui/501/com.fifth.newsbot` → Resume Space.
+  Возврат на Pi: `launchctl bootout` + `disable` → `sudo systemctl start newsbot`.
+- HF Space: демонтирован 2026-09-19 (к запуску миграции Space уже не
+  существовал, GH secret `HF_TOKEN` и vars `HF_REPO_ID`/`HF_SPACE_HOST`
+  отсутствовали; workflows `deploy.yml`/`keepalive.yml` удалены, `tests.yml`
+  остался). Историческое.
 - Ручные CLI-прогоны pipeline (run/digest) — на Mac с остановленным агентом
-  (SQLite-блокировки, R5); news.db остаётся только на Mac.
+  (SQLite-блокировки, R5); news.db остаётся только на Mac, на Pi не запускать.
 
 ## Откат-наследие: launchd (историческое, для отката)
 
 - Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`,
   с 2026-09-13 запускает нового бота: `python3 -m bot` (миграция И7, решение D24).
-  С 2026-09-15 ОТКЛЮЧЁН (прод переехал на HF Space): `launchctl disable` +
-  bootout; plist сохранён для отката (см. раздел выше).
-  Один потребитель getUpdates: перед ручным запуском бота останови агент (иначе 409).
+  С 2026-09-15 ОТКЛЮЧЁН (прод переехал на HF Space), с 2026-09-19 — снова
+  выключен (прод на Raspberry Pi; см. раздел выше): `launchctl disable` +
+  bootout; plist сохранён для отката (см. «Прод-хостинг: Raspberry Pi»).
+  Один потребитель getUpdates: перед ручным запуском бота останови прод-агента
+  (`sudo systemctl stop newsbot` на Pi), иначе 409.
 - Сводки per-user, двухфазно: подготовка (сбор + LLM) за 10 мин до слота,
   отправка ровно в слот; расписание каждого чата — в `/settings` (bot.db,
   `users.send_times`); после сна Mac — одна догоняющая сводка за всё окно.

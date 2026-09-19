@@ -3,6 +3,61 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-19 — iter-12: миграция прод-хостинга на Raspberry Pi (D49–D55)
+
+- **Демонтаж HF Space** (D50): к запуску миграции Space уже не существовал
+  (getUpdates свободен), GH secret `HF_TOKEN` и vars `HF_REPO_ID`/`HF_SPACE_HOST`
+  отсутствовали; удалены workflows `deploy.yml`/`keepalive.yml` (`tests.yml`
+  остался), `public` пересобран orphan-ом, скан снапшота чист, запушен
+  `public:main` (aada1ac). Mac launchd-агент `com.fifth.newsbot` — bootout +
+  disable (plist сохранён, cold standby).
+- **Pi: очистка и доступ** (D54, частично переопределено пользователем): чужие
+  проекты удалены (`.openclaw` + user-юнит openclaw-gateway, npm/кэши), база —
+  свежий Raspberry Pi OS trixie aarch64 (Debian 13). **D55: пользователь
+  отклонил переименование в `newsagent` — ОС-пользователь и hostname остались
+  `minibrick`** (пароль известен пользователю; sudo NOPASSWD восстановлен после
+  того, как обновление sudo переименовало `010_pi-nopasswd` в `.dpkg-backup`).
+  SSH-ключ ed25519 Mac установлен через RPi Connect remote shell (доступ
+  восстановлен после потери пароля; Pi перелинкована на текущий аккаунт RPi
+  Connect по auth-key). `apt full-upgrade` докатан (сначала обрыв по таймауту
+  SSH, dpkg дошёл сам; `rpi-chromium-mods` донастроен `--force-confold`).
+- **AmneziaWG** (D49): repo.amnezia.org из РФ недоступен → сборка из исходников
+  github.com/amnezia-vpn (`amneziawg-tools` → `awg`/`awg-quick`,
+  `amneziawg-go` v3.1.20260828 → `/usr/local/bin/awg-go`; golang-go, ~/src).
+  Конфиг `vpn.conf` → `/etc/amnezia/amneziawg/awg0.conf` (600), AWG-параметры
+  Jc/Jmin/Jmax/S1–S4/H1–H4, full-tunnel, DNS=10.254.254.8, MTU 1280, endpoint
+  lt.*:9987 (IP 195.58.46.21). Kill-switch — nft-таблица `inet awgks`
+  (`awgks.nft`: drop всего кроме lo/awg0/LAN/multicast/endpoint, established).
+- **Юнит `awg0.service`** (Type=simple): MainPID = `awg-go -f awg0`,
+  ExecStartPost = `awg0-configure.sh` (setconf через `awg-quick strip`,
+  addr/mtu/up, fwmark 51820 + policy-роутинг full-tunnel, resolvconf,
+  nft kill-switch), ExecStopPost = `awg0-deconfigure.sh` (полная чистка).
+  Замечено: `awg-quick up` отказывается настраивать уже существующий интерфейс
+  («already exists») и не умеет чистить хвосты после краша демона — поэтому
+  свой configure/deconfigure вместо `awg-quick@.service`.
+- **Проверки VPN**: exit-IP 45.85.105.215 (не домашний), api.telegram.org 302,
+  api.z.ai 301, Supabase pooler select 1 — OK. Kill-switch: kill -9 awg-go →
+  интерфейс исчез, nft-правила остались, ipinfo/telegram BLOCKED (утечки в
+  домашний IP нет), автоперезапуск ~5 c, NRestarts=1, туннель восстановлен.
+- **Код на Pi** (D51/D52/D53): rsync bot/pipeline/tests/requirements/.env
+  (чистые KEY=VALUE, без inline-комментариев и BOT_TEST_PG_URL) →
+  `/home/minibrick/news`, venv (python 3.13.5), pip — импорты OK. Регрессия
+  `BOT_TEST_PG_URL= ... -m unittest discover -s tests` → **114/114** на sqlite;
+  PG-смоук Supabase — OK.
+- **Юнит `newsbot.service`**: Requires/After=awg0.service, User=minibrick,
+  WorkingDirectory=/home/minibrick/news, venv, BOT_IP_PIN=0, TZ=Europe/Moscow,
+  Restart=always. Старт 21:37 MSK: retention на старте, collect_loop собрал
+  источники через туннель (seekingalpha +7, robotreport +1, cnbc +1 и др.;
+  reddit 429 — известный лимит, повтор), LLM api.z.ai 200, 409/traceback НЕТ.
+- **Ребут-тест**: `systemctl reboot` → обе службы поднялись сами, туннель и
+  kill-switch активны, бот собирает. TG-команды (/start, /sources, /digest) —
+  приёмка пользователем; наблюдение 24 ч.
+- **Документация** (F): `.gitignore` += `vpn.conf` (приватный ключ, теперь
+  игнорируется), AGENTS.md — секция «Прод-хостинг: Raspberry Pi», HF Space →
+  историческое, откат — Mac launchd; README.md — убраны HF front-matter и
+  BOT_HEALTH_PORT; logrotate `/etc/logrotate.d/newsbot` (weekly, rotate 4,
+  compress). План миграции — `.kilo/plans/1789833048288-raspberry-pi-migration-plan.md`.
+
 ## 2026-09-15 — iter-11e (D47): retention — seen_hashes, окна 10/30 дней
 
 - **Схема** (обе SCHEMA_*): `seen_hashes (source_id, url_hash, created_at,
