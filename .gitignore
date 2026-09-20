@@ -6,5 +6,5 @@ __pycache__/
 .venv/
 bot.db
 .vercel/
-.kilo/plans/
+.kimi-code/plans/
 vpn.conf

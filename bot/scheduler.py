@@ -204,6 +204,16 @@ async def collect_once(conn) -> int:
         except Exception as exc:
             log.error("collect chat=%s: %s", row["chat_id"], exc)
     log.info("collect: +%d новых, %d ошибок", total, errors)
+    from . import enrich  # iter-14b: докачка текстов после сбора
+
+    try:
+        await asyncio.to_thread(enrich.enrich_once, conn)
+    except Exception as exc:
+        log.error("enrich: %s", exc)
+    try:
+        await asyncio.to_thread(enrich.map_once, conn)  # iter-14c: выжимки
+    except Exception as exc:
+        log.error("map: %s", exc)
     return total
 
 

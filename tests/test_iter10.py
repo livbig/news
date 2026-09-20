@@ -201,6 +201,8 @@ class BRNormalization(unittest.TestCase):
         self.assertEqual(llm._normalize("a<br />b"), "a\nb")
         self.assertEqual(llm._normalize("a<BR>b"), "a\nb")
         self.assertEqual(llm._normalize("a <b>жирный</b>"), "a <b>жирный</b>")  # теги a/b/i не трогаем
+        self.assertEqual(llm._normalize("• Пункт"), "Пункт")  # буллеты контрактом запрещены
+        self.assertEqual(llm._normalize("Лид\n• <b>Пункт</b>"), "Лид\n<b>Пункт</b>")
 
     def test_summarize_normalizes(self):
         from pipeline import config as pconfig

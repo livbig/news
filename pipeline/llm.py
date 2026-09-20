@@ -41,6 +41,15 @@ CHAT_SYSTEM_PROMPT = """Ты — ассистент владельца личн�
 
 def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: float = 300.0) -> str:
     """Стриминговый вызов: длинные генерации не упираются в read-timeout."""
+    payload = {
+        "model": config.LLM_MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+        "stream": True,
+    }
+    if config.LLM_THINKING:  # iter-15: режим мышления модели (LLM_THINKING — сырой JSON)
+        payload["thinking"] = json.loads(config.LLM_THINKING)
     parts: list[str] = []
     with httpx.stream(
         "POST",
@@ -49,13 +58,7 @@ def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: floa
             "Authorization": f"Bearer {config.LLM_API_KEY}",
             "anthropic-version": "2023-06-01",
         },
-        json={
-            "model": config.LLM_MODEL,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": messages,
-            "stream": True,
-        },
+        json=payload,
         timeout=httpx.Timeout(read_timeout, connect=30.0),
     ) as response:
         if response.status_code != 200:

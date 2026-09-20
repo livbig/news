@@ -5,17 +5,25 @@ Postgres (М2; bot.db SQLite — архив/откат) → LLM-мега-дай�
 флагман D41) → Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` на
 TELEGRAM_CHAT_ID; мультипользовательность отклонена.
 
-## Режим «мега-дайджест» (iter-11, 2026-09-15; план .kilo/plans/mega-digest)
+## Режим «мега-дайджест» (iter-11, 2026-09-15; план .kimi-code/plans/mega-digest)
 
 - **Непрерывный сбор** (D44): фоновый `collect_loop` каждые
   BOT_COLLECT_INTERVAL=1800 c собирает все источники (rss/html/twitter — пул
   6 воркеров, tgweb строго последовательно с паузами); prep перед слотом —
   только LLM. `/digest` и «сводка сейчас» собирают по-прежнему.
 - **Дайджест**: один mega-вызов GLM-5.3 (D42), системный промпт согласован
-  дословно (bot/llm.py, не редактировать без пользователя), формат 3-4
+  дословно (bot/llm.py, не редактировать без пользователя; формат
+  заголовков/пунктов ревизован 2026-09-20: заголовки разделов капсом+эмодзи,
+  пункты без буллетов), формат 3-4
   сообщения, у каждого пункта эмодзи-ссылка на первоисточник (D43);
   вход — per-source бюджет BOT_DIGEST_PER_SOURCE=15, кап
-  BOT_DIGEST_MAX_ITEMS=800 (window ROW_NUMBER), без урезания контекста.
+  BOT_DIGEST_MAX_ITEMS=800 (window ROW_NUMBER); пункт идёт с «ВЫЖИМКА:»
+  (LLM-выжимка из items.gist) или «ТЕКСТ:» (выдержка ≤BOT_DIGEST_TEXT_CAP
+  из items.text), iter-14.
+- **Полные тексты (iter-14)**: TG-посты и content фидов пишутся в
+  items.text (кап BOT_ITEM_TEXT_CAP=4000); недостающее докачивается фоном
+  в collect_loop (bot/enrich.py: trafilatura, BOT_ENRICH_*) и сжимается
+  map-стадией в items.gist (BOT_MAP_*); попытки без ретраев (enriched=2).
 - **Онбординг = LLM-интервью** (D45): 5-8 раундов (bot/interview.py,
   кнопки «Достаточно»/«Пропустить»), итог — профиль в `users.interests_text`
   (читается промптом дайджеста), затем `llm.suggest_sources` → валидация
@@ -31,7 +39,7 @@ TELEGRAM_CHAT_ID; мультипользовательность отклоне�
   каждые 6 ч + на старте (`scheduler.retention_loop`).
 - **Лимит источников**: BOT_MAX_SOURCES=100 на чат (D46).
 - Миграция хостинга на Raspberry Pi выполнена 2026-09-19 (iter-12; план
-  `.kilo/plans/1789833048288-raspberry-pi-migration-plan.md`; решения D49–D55) —
+  `.kimi-code/plans/1789833048288-raspberry-pi-migration-plan.md`; решения D49–D55) —
   см. «Прод-хостинг: Raspberry Pi».
 
 ## Команды

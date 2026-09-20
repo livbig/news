@@ -94,7 +94,8 @@ class TC46Pinning(unittest.TestCase):
 # --- TC-44 (unit): аудит зависимостей (NFR-01) ----------------------------------
 
 class TC44Dependencies(unittest.TestCase):
-    ALLOWED_THIRDPARTY = {"aiogram", "httpx", "feedparser", "bs4", "psycopg"}  # D11: +bs4, М2: +psycopg
+    ALLOWED_THIRDPARTY = {"aiogram", "httpx", "feedparser", "bs4", "psycopg",
+                          "trafilatura"}  # D11: +bs4, М2: +psycopg, 14b: +trafilatura
     BANNED = ("telethon", "pyrogram", "django", "fastapi", "celery", "flask")
 
     def test_bot_imports_are_known(self):

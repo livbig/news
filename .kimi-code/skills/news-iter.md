@@ -1,6 +1,7 @@
 ---
+name: news-iter
 description: "Iteration of the news pipeline based on feedback/logs"
-agent: code
+whenToUse: When the user asks to run a news pipeline iteration
 ---
 
 Read AGENTS.md and karpathy-guidelines.md in the project root, then the tail of logs/run.log (if it exists).

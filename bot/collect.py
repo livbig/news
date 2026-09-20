@@ -136,6 +136,23 @@ def fetch_feed(url: str):
     return parsed.feed.get("title") or url, parsed.entries
 
 
+def _entry_text(entry) -> str | None:
+    """Нативный полный текст записи фида (iter-14, уровень 1): content/
+    content:encoded, иначе summary. None — текста нет или он не содержательнее
+    заголовка (дубль-шум не хранится). HTML-теги срезаются."""
+    parts = entry.get("content") or []
+    text = " ".join(
+        c.get("value", "") for c in parts if isinstance(c, dict)
+    ).strip()
+    if not text:
+        text = (entry.get("summary") or "").strip()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = " ".join(text.split())
+    if len(text) <= len(entry.get("title", "")) + 80:
+        return None
+    return text[:config.ITEM_TEXT_CAP]
+
+
 def _insert_entries(conn, source_id, entries) -> int:
     added = 0
     for entry in entries[:MAX_ARTICLES_PER_FEED]:
@@ -143,7 +160,8 @@ def _insert_entries(conn, source_id, entries) -> int:
         title = entry.get("title", "")
         if not link or not title:
             continue
-        if db.insert_item(conn, source_id, link, title, _iso(entry)):
+        if db.insert_item(conn, source_id, link, title, _iso(entry),
+                          _entry_text(entry)):
             added += 1
     return added
 
@@ -242,7 +260,9 @@ def collect_tgweb(conn, source_id, name: str, last_seen: int) -> int:
         if last_seen and n and n <= last_seen:
             continue
         title = " ".join(text.split())[:160]
-        if db.insert_item(conn, source_id, f"https://t.me/{post_id}", title, _iso_dt(dt)):
+        if db.insert_item(conn, source_id, f"https://t.me/{post_id}", title,
+                          _iso_dt(dt),
+                          " ".join(text.split())[:config.ITEM_TEXT_CAP]):
             added += 1
     if max_id > (last_seen or 0):
         db.set_last_post_id(conn, source_id, max_id)

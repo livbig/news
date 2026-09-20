@@ -30,6 +30,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4")
 LLM_MODEL = os.environ.get("LLM_MODEL", "glm-5.3")
+LLM_THINKING = os.environ.get("LLM_THINKING", "")  # сырой JSON поля thinking (пусто → не слать)
 
 MAX_ARTICLES_PER_FEED = 60
 

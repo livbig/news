@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS items (
   source_id    INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
   url          TEXT NOT NULL,
   title        TEXT NOT NULL,
+  text         TEXT,
+  enriched     INTEGER NOT NULL DEFAULT 0,
+  gist         TEXT,
   published    TEXT NOT NULL,
   fetched_at   TEXT NOT NULL,
   url_hash     TEXT NOT NULL,
@@ -121,6 +124,9 @@ CREATE TABLE IF NOT EXISTS items (
   source_id    INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
   url          TEXT NOT NULL,
   title        TEXT NOT NULL,
+  text         TEXT,
+  enriched     INTEGER NOT NULL DEFAULT 0,
+  gist         TEXT,
   published    TEXT NOT NULL,
   fetched_at   TEXT NOT NULL,
   url_hash     TEXT NOT NULL,
@@ -260,12 +266,25 @@ def _run_schema(conn, schema):
 
 
 def _migrate(conn) -> None:
-    """Идемпотентные миграции поверх свежей схемы (11d/D45: interests_text —
-    колонка отсутствует только у БД, созданных до iter-11d)."""
+    """Идемпотентные миграции поверх свежей схемы (11d/D45: interests_text,
+    iter-14: items.text — колонки отсутствуют только у БД, созданных до
+    соответствующей итерации)."""
     try:
         conn.execute("ALTER TABLE users ADD COLUMN interests_text TEXT")
     except (sqlite3.OperationalError, pg_errors.DuplicateColumn):
         pass  # колонка уже есть (SCHEMA_* для свежих БД или прошлый запуск)
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN text TEXT")
+    except (sqlite3.OperationalError, pg_errors.DuplicateColumn):
+        pass
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN enriched INTEGER DEFAULT 0")
+    except (sqlite3.OperationalError, pg_errors.DuplicateColumn):
+        pass  # iter-14b: 0 — попытка не была, 1 — текст уже есть, 2 — попытка завершена
+    try:
+        conn.execute("ALTER TABLE items ADD COLUMN gist TEXT")
+    except (sqlite3.OperationalError, pg_errors.DuplicateColumn):
+        pass  # iter-14c: LLM-выжимка; NULL — не обрабатывалось, '' — пустышка/сбой
 
 
 def connect(path=None):
@@ -332,10 +351,11 @@ def minus_iso(now: str, hours: int) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def insert_item(conn, source_id, url, title, published) -> bool:
+def insert_item(conn, source_id, url, title, published, text=None) -> bool:
     """Вставка элемента с дедупом UNIQUE(source_id, url_hash) (R5/D19) и
     надгробием seen_hashes (11e/D47): удалённая по retention запись фида
-    не вставляется повторно — False (как дубль)."""
+    не вставляется повторно — False (как дубль). text — полный текст пункта
+    (iter-14, уровень 1: TG-пост/текст фида)."""
     digest = url_hash(url, title)
     if conn.execute(
         "SELECT 1 FROM seen_hashes WHERE source_id=%s AND url_hash=%s",
@@ -344,9 +364,10 @@ def insert_item(conn, source_id, url, title, published) -> bool:
         return False
     try:
         conn.execute(
-            "INSERT INTO items (source_id, url, title, published, fetched_at, url_hash)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
-            (source_id, url, title, published or now_iso(), now_iso(), digest),
+            "INSERT INTO items (source_id, url, title, text, enriched, published, fetched_at, url_hash)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (source_id, url, title, text, 1 if text else 0,
+             published or now_iso(), now_iso(), digest),
         )
         return True
     except (sqlite3.IntegrityError, pg_errors.UniqueViolation):
@@ -522,8 +543,8 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
     per_source = per_source if per_source is not None else config.DIGEST_PER_SOURCE
     limit = limit if limit is not None else config.DIGEST_MAX_ITEMS
     return conn.execute(
-        "SELECT id, title, url FROM ("
-        "  SELECT i.id, i.title, i.url, i.published,"
+        "SELECT id, title, url, text, gist FROM ("
+        "  SELECT i.id, i.title, i.url, i.text, i.gist, i.published,"
         "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
         "                            ORDER BY i.published DESC, i.id DESC) AS rn"
         "  FROM items i JOIN sources s ON s.id = i.source_id"
@@ -533,6 +554,59 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
         ") t WHERE rn <= %s ORDER BY published DESC, id DESC LIMIT %s",
         (chat_id, chat_id, per_source, limit),
     ).fetchall()
+
+
+def enrich_targets(conn, limit) -> list:
+    """Кандидаты на докачку текста (iter-14b): без своего текста и без
+    завершённой попытки (enriched=0), ещё не потреблённые дайджестом чата.
+    per-source бюджет — как у дайджеста: «болтливый» фид не съедает квоту
+    прогона."""
+    return conn.execute(
+        "SELECT id, url, kind, title FROM ("
+        "  SELECT i.id, i.url, i.title, s.kind, i.published,"
+        "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
+        "                            ORDER BY i.published DESC, i.id DESC) AS rn"
+        "  FROM items i JOIN sources s ON s.id = i.source_id"
+        "  WHERE i.text IS NULL AND i.enriched = 0 AND NOT EXISTS ("
+        "    SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
+        "    WHERE di.item_id=i.id AND d.chat_id=s.chat_id)"
+        ") t WHERE rn <= %s ORDER BY id DESC LIMIT %s",
+        (config.DIGEST_PER_SOURCE, limit),
+    ).fetchall()
+
+
+def set_item_text(conn, item_id, text, enriched=2) -> None:
+    """Результат попытки обогащения (iter-14b): текст или его отсутствие."""
+    conn.execute(
+        "UPDATE items SET text=%s, enriched=%s WHERE id=%s",
+        (text, enriched, item_id),
+    )
+
+
+def map_targets(conn, limit) -> list:
+    """Кандидаты map-стадии (iter-14c): полный текст есть, выжимки ещё нет
+    (gist IS NULL), пункт не потреблён дайджестом чата. per-source бюджет —
+    как у дайджеста."""
+    return conn.execute(
+        "SELECT id, text FROM ("
+        "  SELECT i.id, i.text, i.published,"
+        "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
+        "                            ORDER BY i.published DESC, i.id DESC) AS rn"
+        "  FROM items i JOIN sources s ON s.id = i.source_id"
+        "  WHERE i.text IS NOT NULL AND i.gist IS NULL AND NOT EXISTS ("
+        "    SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
+        "    WHERE di.item_id=i.id AND d.chat_id=s.chat_id)"
+        ") t WHERE rn <= %s ORDER BY id DESC LIMIT %s",
+        (config.DIGEST_PER_SOURCE, limit),
+    ).fetchall()
+
+
+def set_item_gist(conn, item_id, gist) -> None:
+    """Результат map-стадии (iter-14c): выжимка или '' (пустышка/сбой)."""
+    conn.execute(
+        "UPDATE items SET gist=%s WHERE id=%s",
+        (gist, item_id),
+    )
 
 
 def get_interests(conn, chat_id) -> str | None:

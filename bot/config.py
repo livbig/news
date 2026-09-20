@@ -34,6 +34,19 @@ TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")
 DIGEST_PER_SOURCE = int(os.environ.get("BOT_DIGEST_PER_SOURCE", "15"))
 DIGEST_MAX_ITEMS = int(os.environ.get("BOT_DIGEST_MAX_ITEMS", "800"))
 
+# iter-14 (уровень 1): полные тексты пунктов — кап хранения и кап выдержки в промпте
+ITEM_TEXT_CAP = int(os.environ.get("BOT_ITEM_TEXT_CAP", "4000"))
+DIGEST_TEXT_CAP = int(os.environ.get("BOT_DIGEST_TEXT_CAP", "1200"))
+
+# iter-14b (уровень 2): фоновая докачка статей — квоты и вежливость
+ENRICH_MAX_PER_RUN = int(os.environ.get("BOT_ENRICH_MAX_PER_RUN", "60"))
+ENRICH_MIN_CHARS = int(os.environ.get("BOT_ENRICH_MIN_CHARS", "200"))
+ENRICH_PAUSE = float(os.environ.get("BOT_ENRICH_PAUSE", "1.5"))
+
+# iter-14c (уровень 3): map-стадия — LLM-выжимки статей в фоне днём
+MAP_MAX_PER_RUN = int(os.environ.get("BOT_MAP_MAX_PER_RUN", "25"))
+MAP_WORKERS = int(os.environ.get("BOT_MAP_WORKERS", "4"))
+
 # iter-11c (D44): непрерывный фоновый сбор — интервал и пул воркеров
 COLLECT_INTERVAL = int(os.environ.get("BOT_COLLECT_INTERVAL", "1800"))
 COLLECT_WORKERS = int(os.environ.get("BOT_COLLECT_WORKERS", "6"))

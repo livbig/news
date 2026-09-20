@@ -61,7 +61,7 @@ def main() -> int:
     conn = db.connect()
     handlers.init(conn)
     try:
-        scheduler.retention_once(conn)  # 11e/D47: один прогон retention на старте
+        asyncio.run(scheduler.retention_once(conn))  # 11e/D47; fix 14b: это корутина
     except Exception as exc:
         log.error("retention на старте: %s", exc)
     if not config.TOKEN:

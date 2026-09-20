@@ -306,7 +306,7 @@ class DigestPrompt(unittest.TestCase):
 
         _out, calls = self.captured_call("x")
         for marker in ("личный аналитик одного читателя", "12000-16000",
-                       "ЭМОДЗИ", "👀 На радаре", "💡 Синтез", '<a href="URL">'):
+                       "ЭМОДЗИ", "👀 НА РАДАРЕ", "🧠 СИНТЕЗ", '<a href="URL">'):
             self.assertIn(marker, calls["system"])
         self.assertEqual(calls["max_tokens"], llm.MAX_TOKENS)
         self.assertEqual(calls["messages"],
@@ -428,6 +428,233 @@ class BuildDeltaWrapsNews(unittest.TestCase):
         self.assertIn("Первое &amp; &lt;важное&gt; — http://ex.test/1", content)  # FR-16
         self.assertIn(llm.DEFAULT_INTERESTS, calls["system"])  # профиля в БД ещё нет
         self.assertEqual(len(ids), 1)
+
+
+class ItemTextLevel1(unittest.TestCase):
+    """iter-14 (уровень 1): items.text — хранение полного текста пункта,
+    выдержка «ТЕКСТ: …» во входе дайджеста (кап + экранирование), миграция."""
+
+    CHAT = 79
+
+    def test_migration_column_and_pending(self):
+        from bot import db
+
+        conn = db.connect(":memory:")
+        db._migrate(conn)  # идемпотентность: второй прогон не падает
+        db.ensure_user(conn, self.CHAT)
+        sid = db.add_source(conn, self.CHAT, "tgweb", "channel", "Канал")
+        self.assertTrue(db.insert_item(conn, sid, "https://t.me/c/1", "Заголовок",
+                                       "2026-09-19T10:00:00Z", "Полный текст поста"))
+        rows = db.pending_items(conn, self.CHAT)
+        self.assertEqual(rows[0]["text"], "Полный текст поста")
+
+    def test_digest_input_includes_text_excerpt(self):
+        from pipeline import config as pconfig
+
+        from bot import config, db, digest, llm
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, self.CHAT)
+        sid = db.add_source(conn, self.CHAT, "rss", "http://x.test/f.xml", "Feed")
+        body = "Золото <b>растёт</b>. " + "х" * (config.DIGEST_TEXT_CAP + 500)
+        db.insert_item(conn, sid, "http://ex.test/1", "Новость",
+                       "2026-09-10T00:00:00Z", body)
+        db.insert_item(conn, sid, "http://ex.test/2", "Без текста",
+                       "2026-09-10T01:00:00Z")
+
+        captured = {}
+
+        def fake_call(system, messages, max_tokens, read_timeout=None):
+            captured["user"] = messages[0]["content"]
+            return "Лид."
+
+        real_call, real_key = llm._call, pconfig.LLM_API_KEY
+        llm._call = fake_call
+        pconfig.LLM_API_KEY = "test-key"
+        try:
+            digest.build_delta(conn, self.CHAT)
+        finally:
+            llm._call, pconfig.LLM_API_KEY = real_call, real_key
+
+        content = captured["user"]
+        self.assertIn("ТЕКСТ: Золото &lt;b&gt;растёт&lt;/b&gt;.", content)  # FR-16
+        self.assertIn("…", content)  # выдержка усечена
+        self.assertNotIn("х" * (config.DIGEST_TEXT_CAP + 1), content)  # кап работает
+        self.assertIn("Без текста — http://ex.test/2\n\n", content)
+        self.assertNotIn("ТЕКСТ: Без текста", content)  # пункт без текста — как раньше
+
+    def test_entry_text_from_feed(self):
+        import feedparser
+
+        from bot import collect
+
+        xml = (
+            '<?xml version="1.0"?><rss version="2.0" '
+            'xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+            "<channel><title>T</title>"
+            "<item><title>Короткий заголовок</title><link>http://ex.test/1</link>"
+            "<description>Короткий заголовок</description></item>"
+            "<item><title>Вторая новость</title><link>http://ex.test/2</link>"
+            "<content:encoded><![CDATA[<p>Полный текст статьи, заметно длиннее "
+            "заголовка — " + "смысл " * 40 + "</p>]]></content:encoded></item>"
+            "</channel></rss>"
+        )
+        entries = feedparser.parse(xml).entries
+        self.assertIsNone(collect._entry_text(entries[0]))  # summary = заголовок
+        text = collect._entry_text(entries[1])
+        self.assertIsNotNone(text)
+        self.assertIn("смысл", text)
+        self.assertNotIn("<p>", text)  # теги срезаны
+
+
+class EnrichLevel2(unittest.TestCase):
+    """iter-14b: фоновая докачка текстов — таргеты, успех/неудача, без повторов."""
+
+    CHAT = 80
+
+    def _setup(self):
+        from bot import db
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, self.CHAT)
+        rss = db.add_source(conn, self.CHAT, "rss", "http://x.test/f.xml", "Feed")
+        tg = db.add_source(conn, self.CHAT, "tgweb", "chan", "Канал")
+        db.insert_item(conn, rss, "http://ex.test/a1", "Статья без текста",
+                       "2026-09-19T10:00:00Z")
+        db.insert_item(conn, tg, "https://t.me/chan/2",
+                       "Читай https://ex.test/a2 подробно", "2026-09-19T11:00:00Z")
+        db.insert_item(conn, rss, "http://ex.test/a3", "С текстом",
+                       "2026-09-19T12:00:00Z", "Уже есть текст")
+        return conn
+
+    def test_extract_url_skips_messengers(self):
+        from bot import enrich
+
+        self.assertEqual(enrich.extract_url("Читай https://example.com/a?t=1 и t.me/foo"),
+                         "https://example.com/a?t=1")
+        self.assertIsNone(enrich.extract_url("только t.me/foo и https://t.me/x"))
+        self.assertIsNone(enrich.extract_url(""))
+
+    def test_enrich_once_success_and_no_retry(self):
+        from unittest import mock
+
+        from bot import db, enrich
+
+        conn = self._setup()
+        fetched = []
+
+        def fake_fetch(url):
+            fetched.append(url)
+            return "Полный текст статьи. " * 30
+
+        with mock.patch.object(enrich, "fetch_article", side_effect=fake_fetch):
+            done, tried = enrich.enrich_once(conn)
+        self.assertEqual((done, tried), (2, 2))
+        # tgweb — цель из первой внешней ссылки заголовка, rss — сама ссылка записи
+        self.assertEqual(sorted(u.rsplit("/", 1)[-1] for u in fetched), ["a1", "a2"])
+        rows = {r["url"]: r for r in db.pending_items(conn, self.CHAT)}
+        self.assertTrue(rows["http://ex.test/a1"]["text"].startswith("Полный текст"))
+        self.assertTrue(rows["https://t.me/chan/2"]["text"].startswith("Полный текст"))
+        self.assertEqual(rows["http://ex.test/a3"]["text"], "Уже есть текст")
+        with mock.patch.object(enrich, "fetch_article", side_effect=fake_fetch):
+            done2, tried2 = enrich.enrich_once(conn)
+        self.assertEqual((done2, tried2), (0, 0))  # повторных попыток нет
+        self.assertEqual(len(fetched), 2)
+
+    def test_enrich_failure_no_retry(self):
+        from unittest import mock
+
+        from bot import enrich
+
+        conn = self._setup()
+        with mock.patch.object(enrich, "fetch_article", return_value=None):
+            done, tried = enrich.enrich_once(conn)
+        self.assertEqual((done, tried), (0, 2))
+        with mock.patch.object(enrich, "fetch_article", return_value="Текст " * 100):
+            done2, tried2 = enrich.enrich_once(conn)
+        self.assertEqual((done2, tried2), (0, 0))  # провал не ретраится
+
+
+class MapLevel3(unittest.TestCase):
+    """iter-14c: map-стадия — LLM-выжимки; дайджест предпочитает ВЫЖИМКУ."""
+
+    CHAT = 81
+
+    def test_map_once_and_digest_prefers_gist(self):
+        from unittest import mock
+
+        from bot import db, digest, enrich
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, self.CHAT)
+        sid = db.add_source(conn, self.CHAT, "rss", "http://x.test/f.xml", "Feed")
+        db.insert_item(conn, sid, "http://ex.test/g1", "Новость с текстом",
+                       "2026-09-19T10:00:00Z", "Длинный полный текст статьи. " * 10)
+        with mock.patch("bot.llm.make_gist",
+                        return_value="ЦБ signal: ставка вниз"):
+            done, tried = enrich.map_once(conn)
+        self.assertEqual((done, tried), (1, 1))
+        rows = db.pending_items(conn, self.CHAT)
+        self.assertEqual(rows[0]["gist"], "ЦБ signal: ставка вниз")
+
+        captured = {}
+
+        def fake_call(system, messages, max_tokens, read_timeout=None):
+            captured["user"] = messages[0]["content"]
+            return "Лид."
+
+        real_call, real_key = digest.llm._call, digest.llm.pconfig.LLM_API_KEY
+        digest.llm._call = fake_call
+        digest.llm.pconfig.LLM_API_KEY = "test-key"
+        try:
+            digest.build_delta(conn, self.CHAT)
+        finally:
+            digest.llm._call, digest.llm.pconfig.LLM_API_KEY = real_call, real_key
+        content = captured["user"]
+        self.assertIn("ВЫЖИМКА: ЦБ signal: ставка вниз", content)
+        self.assertNotIn("ТЕКСТ:", content)  # выжимка заменяет сырой текст
+
+    def test_map_empty_gist_falls_back_to_text(self):
+        from unittest import mock
+
+        from bot import db, digest, enrich
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, self.CHAT)
+        sid = db.add_source(conn, self.CHAT, "rss", "http://x.test/f.xml", "Feed")
+        db.insert_item(conn, sid, "http://ex.test/g2", "Новость",
+                       "2026-09-19T10:00:00Z", "Полный осмысленный текст новости. " * 5)
+        with mock.patch("bot.llm.make_gist", return_value=""):
+            done, tried = enrich.map_once(conn)
+        self.assertEqual((done, tried), (0, 1))  # пустышка: '' записан, не NULL
+        from bot import db as _db
+        self.assertEqual(_db.map_targets(conn, 25), [])  # повторно не выбирается
+        captured = {}
+
+        def fake_call(system, messages, max_tokens, read_timeout=None):
+            captured["user"] = messages[0]["content"]
+            return "Лид."
+
+        real_call, real_key = digest.llm._call, digest.llm.pconfig.LLM_API_KEY
+        digest.llm._call = fake_call
+        digest.llm.pconfig.LLM_API_KEY = "test-key"
+        try:
+            digest.build_delta(conn, self.CHAT)
+        finally:
+            digest.llm._call, digest.llm.pconfig.LLM_API_KEY = real_call, real_key
+        self.assertIn("ТЕКСТ: Полный осмысленный текст", captured["user"])
+
+    def test_map_no_llm_key(self):
+        from pipeline import config as pconfig
+
+        from bot import llm
+
+        saved = pconfig.LLM_API_KEY
+        pconfig.LLM_API_KEY = ""
+        try:
+            self.assertEqual(llm.make_gist("любой текст"), "")
+        finally:
+            pconfig.LLM_API_KEY = saved
 
 
 # --- iter-11c (D44): параллельный сбор, фоновый цикл, prep без сбора -------------
@@ -791,6 +1018,23 @@ class InterviewFlow(ChatCase):
         self.assertIn("Подобрать не удалось", text)
         self.assertIn("базовый набор", text)
         self.press("s:next")  # fallback-пул каталога проходит по флоу дальше
+        self.assertIn("3/5", self.bot.edited_texts()[-1])
+
+    def test_fallback_when_suggest_fails(self):
+        from unittest import mock
+
+        from bot import interview, llm
+
+        with mock.patch.object(interview, "next_question", side_effect=["Вопрос 1", None]), \
+                mock.patch.object(interview, "build_profile", return_value="П: физический AI"), \
+                mock.patch.object(llm, "suggest_sources",
+                                  side_effect=RuntimeError("LLM сломалась")):
+            self.send("/start")
+            self.press("i:done")
+            self.press("i:ok")  # сбой подбора не роняет хендлер (инцидент 2026-09-20)
+        text = self.bot.sent_texts()[-1]
+        self.assertIn("Подобрать не удалось", text)
+        self.press("s:next")  # флоу продолжается
         self.assertIn("3/5", self.bot.edited_texts()[-1])
 
     def test_fallback_at_start_when_llm_off(self):

@@ -200,17 +200,26 @@ async def ms_interview_answer(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(Survey.profile), F.data == "i:ok")
 async def cq_profile_ok(cb: CallbackQuery, state: FSMContext):
-    """Профиль принят → LLM-подбор источников → валидация → мультивыбор."""
+    """Профиль принят → LLM-подбор источников → валидация → мультивыбор.
+    Колбэк Telegram живёт секунды, а подбор — минуты: cb.answer() сразу,
+    до долгой работы (инцидент 2026-09-20: answer после подбора —
+    «query is too old», краш до fallback, FSM висел на шаге профиля)."""
     chat_id, user_id = cb.message.chat.id, cb.from_user.id
     _touch(chat_id, user_id)
+    await cb.answer()
     data = await state.get_data()
     profile = data.get("interests_draft") or llm.DEFAULT_INTERESTS
     placeholder = await cb.message.bot.send_message(
         chat_id, "Подбираю источники по профилю — пара минут…")
-    candidates = await asyncio.to_thread(llm.suggest_sources, profile)
-    valid = await asyncio.to_thread(collect.validate_candidates, candidates) if candidates else []
+    try:
+        candidates = await asyncio.to_thread(llm.suggest_sources, profile)
+        _touch(chat_id, user_id)  # подбор до 5 мин — sweeper (600 с) не должен вмешаться
+        valid = await asyncio.to_thread(
+            collect.validate_candidates, candidates) if candidates else []
+    except Exception as exc:
+        log.error("подбор chat=%s: %r", chat_id, exc)
+        valid = []
     _touch(chat_id, user_id)
-    await cb.answer()
     if len(valid) < MIN_VALID_SOURCES:
         log.warning("подбор chat=%s: %d валидных кандидатов — fallback", chat_id, len(valid))
         await _fallback_pool(cb.message.bot, chat_id, state,
