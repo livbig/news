@@ -1,0 +1,10 @@
+.env
+news.db
+logs/
+digests/
+__pycache__/
+.venv/
+bot.db
+.vercel/
+.kimi-code/plans/
+vpn.conf
