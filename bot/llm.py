@@ -1,7 +1,8 @@
 """LLM-сводка бота (И5 → iter-11b/D41-D43): mega-вызов одним запросом,
 формат 3-4 сообщения с эмодзи-ссылками на первоисточник, персональный
 профиль интересов (11d) вместо жёстких приоритетов; стриминг `_call` (R9),
-2 попытки + mock-фолбэк (D25). Диалог (И7): pipeline.llm.chat (R11/D27).
+2 попытки + LLMError с причиной (iter-16: mock пользователю больше не
+отправляется). Диалог (И7): pipeline.llm.chat (R11/D27).
 11d/D45: подбор источников по профилю (suggest_sources)."""
 import json
 import logging
@@ -106,14 +107,20 @@ def _system_prompt(interests: str | None) -> str:
     return SYSTEM_PROMPT.replace("{INTERESTS_PROFILE}", profile)
 
 
+class LLMError(RuntimeError):
+    """Сбой LLM при сводке; текст исключения — причина для пользователя."""
+
+
 def summarize(items_text: str, interests: str | None = None) -> str:
     """Сводка по дельте (D42: один mega-вызов). interests — профиль читателя
     (users.interests_text); None/пустой → DEFAULT_INTERESTS. Без ключа —
-    mock (NFR-05); 5xx/таймауты/пустой ответ — 2 попытки с паузой 30 с,
-    затем mock с пометкой (D25); прочие 4xx — сразу mock: ретраи
-    бессмысленны (баланс/авторизация)."""
+    mock (NFR-05: только dev-прогон без токенов, в stdout). iter-16: сбой
+    LLM пользователю mock НЕ доставляется — 4xx/исчерпание попыток поднимает
+    LLMError с причиной, caller шлёт пользователю сообщение о проблеме
+    (запрос 2026-09-21). 5xx/таймауты/пустой ответ — 2 попытки с паузой
+    30 с; прочие 4xx — сразу: ретраи бессмысленны (баланс/авторизация)."""
     if not pconfig.LLM_API_KEY:
-        log.warning("LLM_API_KEY не задан — mock-сводка")
+        log.warning("LLM_API_KEY не задан — mock-сводка (dev)")
         return mock_summary(items_text)
     messages = [{"role": "user", "content": items_text}]
     last_exc: Exception | None = None
@@ -128,18 +135,17 @@ def summarize(items_text: str, interests: str | None = None) -> str:
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code < 500:
                 body = exc.response.text[:200]
-                log.error("LLM API вернул %s: %s — mock-сводка",
-                          exc.response.status_code, body)
-                return mock_summary(
-                    items_text, reason=f"LLM API error {exc.response.status_code}: {body}"
-                )
+                log.error("LLM API вернул %s: %s", exc.response.status_code, body)
+                raise LLMError(
+                    f"LLM API ошибка {exc.response.status_code}: {body}"
+                ) from exc
             last_exc = exc
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_exc = exc
         log.error("LLM попытка %d/%d не удалась: %s", attempt, ATTEMPTS, last_exc)
         if attempt < ATTEMPTS:
             _sleep(RETRY_PAUSE)
-    return mock_summary(items_text, reason=f"LLM недоступна после 2 попыток: {last_exc}")
+    raise LLMError(f"LLM недоступна после {ATTEMPTS} попыток: {last_exc}")
 
 
 # --- 11d/D45: LLM-подбор источников по профилю ------------------------------------

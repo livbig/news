@@ -1,6 +1,7 @@
 """Итерация 5: TC-06 (экранирование спецсимволов), TC-29 (mock-сводка:
 одно сообщение, русский, ссылки), TC-30 («печатает…»), TC-31 (LLM 500 →
-2 попытки → mock, 900×2/пауза 30 c — правки сверки D25)."""
+2 попытки → LLMError с причиной; iter-16: mock пользователю не шлётся,
+900×2/пауза 30 c — правки сверки D25)."""
 import asyncio
 import io
 import re
@@ -291,7 +292,8 @@ class TC30Typing(ChatCase):
         self.assertTrue(any(t == "SendMessage" for t, _v in self.bot.calls))  # бот жив
 
 
-# --- TC-31 (integration): отказ LLM → ретраи → mock-fallback (D25) -----------------
+# --- TC-31 (integration): отказ LLM → ретраи → LLMError с причиной -----------------
+# (iter-16: mock пользователю больше не доставляется — только сообщение о проблеме)
 
 class TC31LLMRetries(unittest.TestCase):
 
@@ -310,20 +312,21 @@ class TC31LLMRetries(unittest.TestCase):
         self.pconfig.LLM_API_KEY, self.pconfig.LLM_BASE_URL = self._saved
         self.llm._sleep = self._real_sleep
 
-    def test_500_retried_then_mock(self):
-        """Маршрут LLM всегда 500: 2 попытки, пауза 30 с, mock с пометкой."""
+    def test_500_retried_then_error(self):
+        """Маршрут LLM всегда 500: 2 попытки, пауза 30 с, LLMError с причиной."""
         self.pconfig.LLM_BASE_URL = BASE
         self.pconfig.LLM_API_KEY = "test-key"
-        text = self.llm.summarize("Первая — http://ex.test/1")
+        with self.assertRaises(self.llm.LLMError) as cm:
+            self.llm.summarize("Первая — http://ex.test/1")
         self.assertEqual(len(POSTS), 2)  # ровно 2 попытки
         self.assertEqual(POSTS, ["/v1/messages"] * 2)
         self.assertEqual(self.pauses, [30.0])  # пауза только между попытками
-        self.assertIn("MOCK", text)  # mock-фолбэк доставлен
-        self.assertIn("2 попыток", text)
-        self.assertIn("http://ex.test/1", text)
+        self.assertIn("2 попыток", str(cm.exception))
+        self.assertIn("500", str(cm.exception))
+        self.assertNotIn("MOCK", str(cm.exception))  # mock не приплетён
 
     def test_timeout_params_and_attempts(self):
-        """Боевые параметры (D25): read-timeout 900 c, 2 попытки, затем mock."""
+        """Боевые параметры (D25): read-timeout 900 c, 2 попытки, затем LLMError."""
         import httpx
         self.pconfig.LLM_API_KEY = "test-key"  # без ключа summarize не дойдёт до _call
         seen: list[tuple] = []
@@ -335,20 +338,132 @@ class TC31LLMRetries(unittest.TestCase):
         real_call = self.llm._call
         self.llm._call = fake_call
         try:
-            text = self.llm.summarize("Новость — http://ex.test/9")
+            with self.assertRaises(self.llm.LLMError) as cm:
+                self.llm.summarize("Новость — http://ex.test/9")
         finally:
             self.llm._call = real_call
         self.assertEqual(len(seen), 2)  # 2 попытки
         self.assertEqual(seen[0][1], 900.0)  # read-timeout 900 c
         self.assertEqual(self.pauses, [30.0])
-        self.assertIn("MOCK", text)
-        self.assertIn("2 попыток", text)
+        self.assertIn("2 попыток", str(cm.exception))
+
+    def test_empty_response_raises(self):
+        """Инцидент 2026-09-21: thinking съел весь max_tokens — 200 OK,
+        пустой text-блок → 2 попытки → LLMError «пустой ответ»."""
+        self.pconfig.LLM_API_KEY = "test-key"
+        real_call = self.llm._call
+        self.llm._call = lambda *a, **k: ""  # 200 OK без text_delta
+        try:
+            with self.assertRaises(self.llm.LLMError) as cm:
+                self.llm.summarize("Новость — http://ex.test/1")
+        finally:
+            self.llm._call = real_call
+        self.assertEqual(self.pauses, [30.0])
+        self.assertIn("пустой ответ", str(cm.exception))
+
+    def test_4xx_immediately(self):
+        """Клиентские 4xx (баланс/авторизация) — без ретраев, LLMError сразу."""
+        import httpx
+        self.pconfig.LLM_API_KEY = "test-key"
+
+        def fake_call(*_a, **_k):
+            req = httpx.Request("POST", "http://llm.test/v1/messages")
+            resp = httpx.Response(402, request=req, text="insufficient balance")
+            raise httpx.HTTPStatusError("err", request=req, response=resp)
+
+        real_call = self.llm._call
+        self.llm._call = fake_call
+        try:
+            with self.assertRaises(self.llm.LLMError) as cm:
+                self.llm.summarize("Новость — http://ex.test/1")
+        finally:
+            self.llm._call = real_call
+        self.assertEqual(self.pauses, [])  # ретраев не было
+        self.assertIn("402", str(cm.exception))
+        self.assertIn("insufficient balance", str(cm.exception))
 
     def test_no_key_is_mock(self):
         self.pconfig.LLM_API_KEY = ""
         text = self.llm.summarize("Новость — http://ex.test/1")
         self.assertIn("MOCK", text)
         self.assertEqual(POSTS, [])  # сети не было вовсе
+
+
+# --- iter-16 (инцидент 2026-09-21): сбой LLM → сообщение о проблеме ----------------
+
+class TC32LLMErrorReport(ChatCase):
+    """Отказ LLM — пользователю уходит причина (не mock); mock остаётся
+    только dev-прогоном без ключа (NFR-05)."""
+
+    def setUp(self):
+        super().setUp()
+        from bot import llm, tgsend
+        self.tgsend = tgsend
+        self.sent: list[tuple] = []
+        self._real_post = tgsend._post
+        tgsend._post = lambda text, chat_id, parse_mode: (
+            self.sent.append((text, parse_mode)), True)[1]
+        tgsend.config.TOKEN = "test"
+        self._real_summarize = llm.summarize
+
+    def tearDown(self):
+        self.tgsend._post = self._real_post
+        self.tgsend.config.TOKEN = ""
+        from bot import llm
+        llm.summarize = self._real_summarize
+
+    @staticmethod
+    def _fail_llm():
+        from bot import llm
+
+        def boom(*_a, **_k):
+            raise llm.LLMError(
+                "LLM недоступна после 2 попыток: пустой ответ (только thinking-блоки?)")
+
+        return boom
+
+    def test_digest_reports_problem(self):
+        """/digest при отказе LLM: одно сообщение с причиной, не mock."""
+        from bot import llm
+
+        self.db.add_source(self.conn(), self.CHAT, "rss", f"{BASE}/valid.xml", "Valid Feed")
+        llm.summarize = self._fail_llm()
+        self.send("/digest")
+        self.assertEqual(len(self.sent), 1)
+        chunk, parse_mode = self.sent[0]
+        self.assertEqual(parse_mode, "HTML")
+        self.assertIn("проблема с LLM", chunk)
+        self.assertIn("пустой ответ", chunk)  # причина названа
+        self.assertNotIn("MOCK", chunk)
+
+    def test_prepare_reports_problem_window_intact(self):
+        """_prepare при отказе LLM: prep с сообщением о проблеме и ids=[]
+        (окно не тронуто — пункты уйдут в следующую сводку)."""
+        from datetime import datetime, timezone
+
+        from bot import db, digest, scheduler
+
+        self.db.ensure_user(self.conn(), self.CHAT)
+        sid = self.db.add_source(
+            self.conn(), self.CHAT, "rss", f"{BASE}/valid.xml", "Valid Feed")
+        self.db.insert_item(self.conn(), sid, "http://ex.test/1", "Новость раз", None)
+        real = digest.build_delta
+        digest.build_delta = self._fail_llm()
+        try:
+            now = datetime.now(timezone.utc)
+            prep = asyncio.run(scheduler._prepare(self.conn(), self.CHAT, now, now))
+        finally:
+            digest.build_delta = real
+        self.assertIsNotNone(prep)
+        self.assertIn("проблема с LLM", prep["text"])
+        self.assertIn("пустой ответ", prep["text"])
+        self.assertEqual(prep["ids"], [])
+        # фиксация отчёта о проблеме не потребляет пункты
+        self.assertTrue(db.record_digest(self.conn(), self.CHAT, prep["text"], []))
+        # ключ в этом модуле пуст (setUpModule) → ветка mock; пункт жив
+        text, ids = digest.build_delta(self.conn(), self.CHAT)
+        self.assertIsNotNone(text)
+        self.assertEqual(len(ids), 1)
 
 
 if __name__ == "__main__":

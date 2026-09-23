@@ -115,11 +115,18 @@ async def fsm_sweeper(bot, storage):
 
 async def _prepare(conn, chat_id, slot, now):
     """Фаза подготовки (D25, сбор убран в 11c/D44): только текст сводки
-    (LLM/mock — И5); свежесть данных обеспечивает фоновый collect_loop."""
-    from . import digest
+    (LLM/mock — И5); свежесть данных обеспечивает фоновый collect_loop.
+    iter-16: сбой LLM — prep с сообщением о проблеме (доставится в слот;
+    ids=[] — окно не тронуто, пункты уйдут в следующую сводку)."""
+    from . import digest, llm
 
     try:
         text, ids = await asyncio.to_thread(digest.build_delta, conn, chat_id)
+    except llm.LLMError as exc:
+        log.error("prep chat=%s: %s", chat_id, exc)
+        return {"slot": slot,
+                "text": f"⚠️ Сводка не готова — проблема с LLM:\n{exc}",
+                "ids": []}
     except Exception as exc:
         log.error("prep chat=%s: %s", chat_id, exc)
         return None

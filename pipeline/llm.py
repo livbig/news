@@ -51,6 +51,7 @@ def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: floa
     if config.LLM_THINKING:  # iter-15: режим мышления модели (LLM_THINKING — сырой JSON)
         payload["thinking"] = json.loads(config.LLM_THINKING)
     parts: list[str] = []
+    stop_reason = usage = None  # iter-16: диагностика пустых/обрезанных ответов
     with httpx.stream(
         "POST",
         f"{config.LLM_BASE_URL}/v1/messages",
@@ -74,9 +75,19 @@ def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: floa
             etype = event.get("type")
             if etype == "content_block_delta" and event.get("delta", {}).get("type") == "text_delta":
                 parts.append(event["delta"]["text"])
+            elif etype == "message_delta":
+                stop_reason = (event.get("delta") or {}).get("stop_reason")
+                usage = event.get("usage") or usage
             elif etype == "error":
                 raise RuntimeError(f"LLM stream error: {event.get('error')}")
-    return "".join(parts)
+    text = "".join(parts)
+    # инцидент 2026-09-21: thinking съедал весь max_tokens (budget 30000 при
+    # max_tokens 32000) → 200 OK, ноль text_delta → «пустой ответ»
+    if not text:
+        log.warning("LLM: пустой text-блок (stop_reason=%s, usage=%s)", stop_reason, usage)
+    elif stop_reason == "max_tokens":
+        log.warning("LLM: ответ обрезан по max_tokens (usage=%s)", usage)
+    return text
 
 
 def summarize(items_text: str) -> str:

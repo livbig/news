@@ -9,7 +9,7 @@ import threading
 
 from pipeline.config import setup_logging
 
-from . import collect, config, db, digest, handlers, scheduler, tgsend
+from . import collect, config, db, digest, handlers, llm, scheduler, tgsend
 
 log = logging.getLogger("bot")
 
@@ -45,7 +45,11 @@ def run_mock(conn) -> int:
         log.error("FAIL %s: %s", config.FEED_URL, exc)
         print(f"Источник недоступен: {exc}")
         return 1
-    text, _ids = digest.build_delta(conn, 0)  # mock-прогон живёт под служебным chat_id=0
+    try:
+        text, _ids = digest.build_delta(conn, 0)  # mock-прогон живёт под служебным chat_id=0
+    except llm.LLMError as exc:  # iter-16: сбой LLM в dev-прогоне — причина в stdout
+        print(f"Проблема с LLM: {exc}")
+        return 1
     if text is None:
         print(digest.EMPTY_TEXT)
     else:

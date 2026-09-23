@@ -25,7 +25,13 @@ async def run_digest(bot, chat_id: int, record: bool = False) -> None:
     футером сводки (план §1.5), отказы изолированы (NFR-02)."""
     async with tgsend.with_typing(bot, chat_id):
         total, errors = await asyncio.to_thread(collect.collect_enabled, onboarding.conn, chat_id)
-        text, ids = await asyncio.to_thread(digest.build_delta, onboarding.conn, chat_id)
+        try:
+            text, ids = await asyncio.to_thread(digest.build_delta, onboarding.conn, chat_id)
+        except llm.LLMError as exc:  # iter-16: сбой LLM — сообщение о проблеме вместо mock
+            log.error("digest chat=%s: %s", chat_id, exc)
+            await asyncio.to_thread(
+                tgsend.send_chat, f"⚠️ Сводка не удалась — проблема с LLM:\n{exc}", chat_id)
+            return
         text = digest.with_footer(text or digest.EMPTY_TEXT, errors)
         sent = await asyncio.to_thread(tgsend.send_chat, text, chat_id)
         if record and sent:  # окно сдвигаем только при доставке (как _deliver)
