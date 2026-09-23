@@ -629,16 +629,25 @@ def set_interests(conn, chat_id, text: str) -> None:
     conn.commit()
 
 
-def record_digest(conn, chat_id, message_text, item_ids, now=None) -> int | None:
-    """Транзакционная фиксация отправки (план §1.2): digests + digest_items +
-    users.last_sent_at одной транзакцией — защита от дублей при catch-up."""
+def digest_period(conn, chat_id, now=None) -> tuple | None:
+    """Период сводки (iter-17): от users.last_sent_at (первая — 24 ч назад,
+    D9) до now; None — чат не знаком (record_digest тогда откажет)."""
     now = now or now_iso()
     row = conn.execute(
         "SELECT last_sent_at FROM users WHERE chat_id=%s", (chat_id,)
     ).fetchone()
     if row is None:
         return None
-    period_from = row[0] or minus_iso(now, 24)  # первая сводка — окно 24 ч (D9)
+    return row[0] or minus_iso(now, 24), now
+
+
+def record_digest(conn, chat_id, message_text, item_ids, now=None) -> int | None:
+    """Транзакционная фиксация отправки (план §1.2): digests + digest_items +
+    users.last_sent_at одной транзакцией — защита от дублей при catch-up."""
+    period = digest_period(conn, chat_id, now)
+    if period is None:
+        return None
+    period_from, now = period
     try:
         with conn.transaction():
             cur = conn.execute(

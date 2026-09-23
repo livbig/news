@@ -1,16 +1,34 @@
 import html
+from datetime import datetime
 
 from . import config, db, llm
 
 EMPTY_TEXT = "Новых новостей с прошлой сводки нет."  # D7/D8
 
 
+def _period_header(period_from: str, period_to: str) -> str:
+    """Детерминированный заголовок сводки (iter-17): LLM вольно трактует лид
+    (утечка метки «Лид:», пропавший заголовок — фидбек 2026-09-23), а период
+    известен точно — пишем сами. Даты локальные (на проде TZ=Europe/Moscow)."""
+    def _local(iso: str) -> datetime:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+
+    d_from, d_to = _local(period_from), _local(period_to)
+    span = (f"{d_from:%d.%m} – {d_to:%d.%m}" if d_from.date() != d_to.date()
+            else f"{d_to:%d.%m}")
+    return f"<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД ({span})</b>"
+
+
 def build_delta(conn, chat_id):
     """Сводка по дельте чата (FR-11, D26; iter-11b/D42): непотреблённые
     элементы — те, что не входили ни в одну сводку чата, до per-source
     бюджета и общего капа (db.pending_items). LLM при наличии ключа, иначе
-    mock (NFR-05, И5). Возвращает (text | None, item_ids); None — пустая
+    mock (NFR-05, И5 — только dev-прогон без ключа). iter-16: сбой LLM →
+    llm.LLMError с причиной; caller шлёт пользователю сообщение о проблеме
+    вместо mock. Возвращает (text | None, item_ids); None — пустая
     дельта. Вход оборачивается в <новости> (контракт промпта §Промпты).
+    iter-17: первая строка вывода — детерминированный заголовок
+    «ГЛАВНОЕ ЗА ПЕРИОД (…)» с периодом из db.digest_period.
 
     Внешние строки (title/url/text) экранируются до сборки (FR-16/TC-06): в
     выводе допустимы только теги LLM, вставки заголовков — буквальный текст.
@@ -36,6 +54,9 @@ def build_delta(conn, chat_id):
         lines.append(line)
     items_text = "<новости>\n" + "\n\n".join(lines) + "\n</новости>"
     text = llm.summarize(items_text, db.get_interests(conn, chat_id))
+    period = db.digest_period(conn, chat_id)
+    if period is not None:  # чат знаком — иначе record_digest всё равно откажет
+        text = f"{_period_header(*period)}\n\n{text}"  # iter-17
     return text, [row["id"] for row in rows]
 
 

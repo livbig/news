@@ -77,6 +77,10 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   пользователь получает «⚠️ …проблема с LLM» с причиной (4xx — сразу,
   5xx/таймаут/пустой text-блок — 2 попытки; _call логирует stop_reason/usage;
   thinking-бюджет держать с запасом от LLM_MAX_TOKENS — инцидент 2026-09-21).
+  iter-17: первая строка дайджеста — детерминированный заголовок
+  «🎯 ГЛАВНОЕ ЗА ПЕРИОД (даты)» от кода (bot/digest.py::_period_header,
+  период = db.digest_period от users.last_sent_at; LLM лид форматировала
+  нестабильно — утечка метки «Лид:», пропавший заголовок).
 - **Полные тексты (iter-14)**: TG-посты и content фидов пишутся в
   items.text (кап BOT_ITEM_TEXT_CAP=4000); недостающее докачивается фоном
   в collect_loop (bot/enrich.py: trafilatura, BOT_ENRICH_*) и сжимается
@@ -108,8 +112,8 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
 - `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
 - `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` —
   регрессия на sqlite; без пустого префикса `:memory:` тестов идёт в PG
-  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 128/128
-  (iter-16, 2026-09-21, sqlite Mac + PG на Pi).
+  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 130/130
+  (iter-17, 2026-09-23, sqlite Mac + PG docker news-pg).
 - `python3 scripts/migrate_sqlite_to_pg.py` — перенос bot.db → Supabase (идемпотентен)
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.

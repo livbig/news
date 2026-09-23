@@ -1175,5 +1175,45 @@ class Retention(unittest.TestCase):
         self.assertIn("items_deleted", counts)
 
 
+class PeriodHeader(unittest.TestCase):
+    """iter-17: детерминированный заголовок «ГЛАВНОЕ ЗА ПЕРИОД (…)» — первая
+    строка дайджеста; период из db.digest_period (LLM его теряла/подделывала)."""
+
+    CHAT = 142
+
+    def test_digest_period(self):
+        from bot import db
+
+        conn = db.connect(":memory:")
+        self.assertIsNone(db.digest_period(conn, 999))  # чат не знаком
+        db.ensure_user(conn, self.CHAT)
+        pf, pt = db.digest_period(conn, self.CHAT, now="2026-09-23T06:00:00Z")
+        self.assertEqual(pt, "2026-09-23T06:00:00Z")
+        self.assertEqual(pf, "2026-09-22T06:00:00Z")  # первая сводка — 24 ч (D9)
+
+    def test_header_prepended(self):
+        from pipeline import config as pconfig
+
+        from bot import db, digest, llm
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, self.CHAT)
+        sid = db.add_source(conn, self.CHAT, "rss", "http://x.test/f.xml", "Feed")
+        db.insert_item(conn, sid, "http://ex.test/1", "Новость", "2026-09-10T00:00:00Z")
+
+        real_call, real_key = llm._call, pconfig.LLM_API_KEY
+        llm._call = lambda *a, **k: "Лид."
+        pconfig.LLM_API_KEY = "test-key"
+        try:
+            text, _ids = digest.build_delta(conn, self.CHAT)
+        finally:
+            llm._call, pconfig.LLM_API_KEY = real_call, real_key
+
+        first = text.split("\n", 1)[0]
+        self.assertTrue(first.startswith("<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД ("), first)
+        self.assertTrue(first.endswith(")</b>"), first)
+        self.assertTrue(text.endswith("Лид."))  # тело LLM не тронуто
+
+
 if __name__ == "__main__":
     unittest.main()
