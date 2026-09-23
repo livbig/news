@@ -182,8 +182,8 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   (nft); краш awg-go → интерфейс исчезает, правила остаются, трафик НЕ утекает
   в домашний IP (проверено kill -9: блокировка до автоперезапуска ~5 c).
 - Регрессия на Pi: `cd ~/news && BOT_TEST_PG_URL= venv/bin/python -m unittest
-  discover -s tests -p "test_iter*.py"` → 128/128 (2026-09-21, iter-16; до этого
-  114/114 на iter-12); PG-смоук через туннель — OK.
+  discover -s tests -p "test_iter*.py"` → 130/130 (2026-09-23, iter-17; до этого
+  128/128 на iter-16); PG-смоук через туннель — OK.
 - Откат на Mac (cold standby): plist `com.fifth.newsbot` сохранён, launchd
   disabled. Порядок: на Pi `sudo systemctl stop --now newsbot` (ЕДИНСТВЕННЫЙ
   getUpdates) → на Mac `launchctl enable gui/501/com.fifth.newsbot` →
