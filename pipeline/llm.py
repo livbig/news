@@ -39,8 +39,22 @@ CHAT_SYSTEM_PROMPT = """Ты — ассистент владельца личн�
 3. По-русски, кратко и по делу, без приветствий и извинений."""
 
 
-def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: float = 300.0) -> str:
-    """Стриминговый вызов: длинные генерации не упираются в read-timeout."""
+class LLMTruncatedError(RuntimeError):
+    """Ответ упёрся в max_tokens (stop_reason=max_tokens): текст пуст или
+    обрезан — доставлять такой дайджест нельзя (инцидент 2026-09-23:
+    thinking съёл почти весь бюджет, пользователю ушло 613 символов
+    «сводки»). Retryable: повтор может уложиться."""
+
+
+def _call(system: str, messages: list[dict], max_tokens: int,
+          read_timeout: float = 300.0, thinking: bool = True) -> str:
+    """Стриминговый вызов: длинные генерации не упираются в read-timeout.
+    thinking=False — мышление отключается ЯВНО (iter-19, DeepSeek: thinking
+    включён по умолчанию; короткие служебные вызовы с малым max_tokens иначе
+    отдают пустой text-блок — map-стадия массово теряла выжимки 2026-09-23).
+    thinking=True: поле thinking — из LLM_THINKING (сырой JSON), усилие —
+    output_config.effort из LLM_EFFORT (iter-19; budget_tokens DeepSeek
+    игнорирует)."""
     payload = {
         "model": config.LLM_MODEL,
         "max_tokens": max_tokens,
@@ -48,8 +62,13 @@ def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: floa
         "messages": messages,
         "stream": True,
     }
-    if config.LLM_THINKING:  # iter-15: режим мышления модели (LLM_THINKING — сырой JSON)
-        payload["thinking"] = json.loads(config.LLM_THINKING)
+    if thinking:
+        if config.LLM_THINKING:  # iter-15: LLM_THINKING — сырой JSON
+            payload["thinking"] = json.loads(config.LLM_THINKING)
+        if config.LLM_EFFORT:  # iter-19: low/high/max (max = максимум)
+            payload["output_config"] = {"effort": config.LLM_EFFORT}
+    else:
+        payload["thinking"] = {"type": "disabled"}
     parts: list[str] = []
     stop_reason = usage = None  # iter-16: диагностика пустых/обрезанных ответов
     with httpx.stream(
@@ -83,10 +102,14 @@ def _call(system: str, messages: list[dict], max_tokens: int, read_timeout: floa
     text = "".join(parts)
     # инцидент 2026-09-21: thinking съедал весь max_tokens (budget 30000 при
     # max_tokens 32000) → 200 OK, ноль text_delta → «пустой ответ»
+    if stop_reason == "max_tokens":
+        log.warning("LLM: ответ обрезан по max_tokens (usage=%s)", usage)
+        raise LLMTruncatedError(
+            f"ответ обрезан по max_tokens={max_tokens} "
+            f"(выход {usage and usage.get('output_tokens')} токенов — "
+            "thinking съёл бюджет или лимит мал)")
     if not text:
         log.warning("LLM: пустой text-блок (stop_reason=%s, usage=%s)", stop_reason, usage)
-    elif stop_reason == "max_tokens":
-        log.warning("LLM: ответ обрезан по max_tokens (usage=%s)", usage)
     return text
 
 
@@ -104,6 +127,11 @@ def summarize(items_text: str) -> str:
             body = exc.response.text[:300]
             log.error("LLM API вернул ошибку %s: %s — mock-сводка", exc.response.status_code, body)
             return mock_summary(items_text, reason=f"LLM API error {exc.response.status_code}: {body}")
+        except LLMTruncatedError as exc:
+            last_exc = exc
+            log.error("LLM ответ обрезан (попытка %d/2): %s", attempt, exc)
+            if attempt == 1:
+                time.sleep(30)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             last_exc = exc
             log.error("LLM таймаут/транспорт (попытка %d/2): %s", attempt, exc)
@@ -118,7 +146,8 @@ CHAT_READ_TIMEOUT = 240.0
 
 def chat(messages: list[dict], news_context: str) -> str:
     system = CHAT_SYSTEM_PROMPT + "\n\nКонтекст последних статей ленты:\n" + news_context
-    return _call(system, messages, 3000, read_timeout=CHAT_READ_TIMEOUT)
+    # thinking=False: при max_tokens=3000 мышление съедало весь бюджет — пустой ответ
+    return _call(system, messages, 3000, read_timeout=CHAT_READ_TIMEOUT, thinking=False)
 
 
 def mock_summary(items_text: str, reason: str = "LLM_API_KEY не задан") -> str:

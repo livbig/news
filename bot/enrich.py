@@ -43,13 +43,13 @@ def extract_url(text: str) -> str | None:
 def fetch_article(url: str) -> str | None:
     """Скачать страницу и вытащить текст статьи. None — недоступно/мало
     текста (ENRICH_MIN_CHARS: заголовочные заглушки не храним)."""
-    from .collectors.http import http_get
+    from .collectors.http import err_code, http_get
 
     try:
         _polite_wait(urlsplit(url).netloc.lower())
         page = http_get(url)
     except Exception as exc:
-        log.warning("enrich FAIL %s: %r", url, exc)
+        log.warning("enrich FAIL %s [%s]: %r", url, err_code(exc), exc)
         return None
     try:
         import trafilatura

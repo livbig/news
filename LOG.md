@@ -3,6 +3,115 @@
 Краткий лог итераций, чтобы любая сессия (или человек) могла восстановить контекст.
 Обновлять при каждой итерации. Продолжение — сверху.
 
+## 2026-09-30 — iter-19: миграция LLM на DeepSeek-V4.1-Flash (effort=max); гейт-middleware; дедуп повторов; Supabase RLS; СИНТЕЗ-эксперт; валюты
+
+- **LLM: Z.ai GLM → DeepSeek** (решение пользователя 2026-09-30: подписка
+  GLM кончилась; Kimi K3 рассматривался и отклонён — API Moonshot оплачивается
+  отдельно от подписки Kimi Pro; пользователь вставил ключ DeepSeek).
+  Модель `deepseek-flash` = DeepSeek-V4.1-Flash (1М контекст; легаси-имена
+  deepseek-v4-flash* роутятся на неё же). Эндпоинт anthropic-совместимый:
+  LLM_BASE_URL=https://api.deepseek.com/anthropic — клиент
+  `pipeline/llm.py::_call` не менялся по протоколу. Ключевые отличия API
+  (по официальной доке DeepSeek): thinking ВКЛЮЧЁН ПО УМОЛЧАНИЮ (дефолтное
+  усилие high), `budget_tokens` игнорируется, усилие задаётся
+  `output_config.effort` (low/high/max).
+  - Новое env LLM_EFFORT=max (решение пользователя: максимальное усилие
+    мышления) → `output_config={"effort": "max"}` в mega-вызове.
+  - `thinking=False` (gist/chat) теперь шлёт ЯВНЫЙ
+    `thinking={"type":"disabled"}` — иначе DeepSeek мыслит по умолчанию
+    и съедает малый max_tokens (та же ловушка, что инцидент iter-18).
+  - LLM_THINKING упрощён до `{"type":"enabled"}` (budget_tokens мёртв).
+  - Живые проверки: одиночный вызов и `llm.summarize` по 2 пунктам —
+    контракт формата соблюдён; на Pi map-стадия ушла в DeepSeek
+    (5 × 200 OK в первом же collect-цикле).
+- **Гейт единственного пользователя (усиление D40)**:
+  - `_AllowedOnlyMiddleware` (bot/handlers/__init__.py) — outer-middleware
+    на message/callback_query диспетчера: чужие апдейты режутся ДО роутеров,
+    включая FSM-хендлеры без своего allowed() (до этого гейт был точечным:
+    входные команды закрыты, но хендлеры состояний проверок не имели).
+  - `allowed()` — fail-closed: боевой токен без TELEGRAM_CHAT_ID = закрыто
+    для всех; открыто только в dev/mock (нет ни токена, ни chat_id — режим
+    тестов и stdout-прогона). Username как условие НЕ используем (изменчив).
+  - 4 тестовых класса (TC29/TC32/TC35/TC36), поднимающие «боевой» TOKEN=test,
+    получили и ALLOWED_CHAT_ID своего чата — иначе fail-closed их резал.
+- **Дедуп повторов** (фидбек: в сводках прямые повторы новостей): item-level
+  дедуп по digest_items уже был — повторы были семантическими (та же новость,
+  новый url/источник). Теперь `db.consumed_keys` (url + нормализованные
+  заголовки пунктов прошлых сводок, окно = жизнь items 10 дн) + фильтр в
+  `db.pending_items`: отсекаются повторы из прошлых дайджестов и дубли внутри
+  выборки (выигрывает свежая копия). Развитие темы с переформулированным
+  заголовком НЕ режется (нормализация = lower + срез небуквенного). Плюс
+  строка в промпте: прямые повторы запрещены, развитие темы — не повтор.
+- **Промпт (согласовано)**: «🧠 СИНТЕЗ» — в роли высококвалифицированного
+  эксперта по экономике, политике и инвестициям; + строка о недопустимости
+  прямых повторов в «Контроль качества».
+- **Интересы**: валютный блок = USD/RUB (главное) + EUR, CNY, JPY в паре
+  с USD — в DEFAULT_INTERESTS и users.interests_text (прод-БД, 1 строка).
+- **Supabase RLS (CRITICAL-письмо 2026-09-27)**: все 10 таблиц public были
+  с rowsecurity=false и грантами anon/authenticated (чтение/запись любому
+  с URL проекта). Включён RLS на всех public-таблицах + REVOKE ALL от
+  anon/authenticated (таблицы и секвенсы). Бот ходит прямым PG-подключением
+  ролью-владельцем (postgres) — RLS обходит легально, смоук read/write OK;
+  на Pi после деплоя retention/сбор пишут в БД без ошибок. Таблицы
+  auth/storage/realtime — управляемые Supabase, не трогали.
+- **Тесты**: +11 (test_iter19.py: TC50-53 гейт/middleware, TC54 дедуп,
+  TC55 payload _call: effort/disabled/пустой effort). Регрессия 149/149:
+  sqlite Mac + PG docker news-pg + sqlite Pi.
+- **Деплой на Pi**: rsync + restart — active, polling, сбор идёт, LLM-вызовы
+  на api.deepseek.com 200 OK, ошибок в логах нет.
+- **Путь репо**: пользователь перенёс проект во время итерации:
+  /Users/fifth/Desktop/ai/news → …/ai/personal/news → …/ai/self/news
+  (финальный). Правки пережили оба переноса (mv всего дерева).
+
+## 2026-09-23 — iter-18: truncated-ответ LLM = сбой; gist/chat без thinking; Reddit OAuth; коды ошибок
+
+- **Инцидент**: вечерняя сводка 21:00 пришла урезанной (613 символов при
+  135 пунктах дельты). Разбор по логам Pi: mega-вызов glm-5.3-flash ушёл в
+  thinking ПОВЕРХ budget_tokens=10000 — попытка 1: 32000 выходных токенов,
+  пустой text-блок; попытка 2: 32000 токенов, stop_reason=max_tokens, текст
+  обрезан на ~600 символах — и `_call` отдавал обрезок как успех.
+  Попутно: map-стадия весь день теряла выжимки — «пустой text-блок
+  (output_tokens=2500)»: thinking съедал MAP_MAX_TOKENS=2500 целиком
+  (LLM_THINKING применялся ко ВСЕМ вызовам, включая gist и chat).
+- **Фикс truncated**: `pipeline/llm.py::_call` при stop_reason=max_tokens
+  бросает LLMTruncatedError (пустой ИЛИ обрезанный текст); `bot/llm.summarize`
+  ретраит и в итоге LLMError → пользователю «⚠️ Сводка не готова…» вместо
+  обрезка (ids=[] — пункты уйдут в следующий слот). Legacy pipeline.summarize —
+  mock с причиной, как и прочие сбои LLM там.
+- **Фикс thinking**: `_call(..., thinking=True)` — флаг; gist (make_gist) и
+  диалог (pipeline.llm.chat) вызываются с thinking=False (короткие служебные
+  вызовы, мышлению там нечего делать — а бюджет оно съедало весь).
+- **Reddit**: источники r/wallstreetbets, r/investing, r/LocalLLaMA мёртвы
+  с переезда на Pi — Reddit блокирует VPN-exit IP на уровне сети
+  (403 Blocked/429; проверено: curl/httpx/httpx-h2/r.jina.ai — всё мимо,
+  блок даже на HTML и api.reddit.com без токена; 372 FAIL за 4 дня).
+  Реализован OAuth-путь (iter-18): env REDDIT_CLIENT_ID/SECRET/USER_AGENT →
+  `collect.fetch_reddit_api` (client_credentials → oauth.reddit.com JSON,
+  перевыпуск токена по 401, `_reddit_entries` — чистый маппинг); без ключей —
+  прежний .rss. **Для включения нужны креденшелы пользователя**
+  (reddit.com/prefs/apps, тип script) — до этого reddit-источники остаются
+  в error; проверить OAuth-путь без ключей невозможно.
+  **Решение пользователя 2026-09-23: Reddit НЕ парсим** (опасения за
+  аккаунт) — источники id 4 (r/investing) и 11 (r/wallstreetbets) отключены
+  (enabled=0, status_msg «[DISABLED]…»); OAuth-код оставлен dormant (без
+  креденшелов неактивен) — возврат = включить источники + прописать ключи.
+  WSB-покрытие интересов тем самым сознательно снято.
+- **Кодификация ошибок**: `bot/collectors/http.py::err_code` — короткие коды
+  (HTTP_403/HTTP_429/TIMEOUT/NETWORK/<EXC>); логи `FAIL url [КОД]: …`,
+  sources.status_msg теперь начинается с `[КОД]`, enrich-логи тоже с кодом.
+- **Конфиг**: .env.example — LLM_MAX_TOKENS 32000 → 64000 (flash мыслит
+  поверх budget_tokens — запас нужен больше; обрезка теперь ошибка, а не
+  тихая деградация), + блок REDDIT_*. На Pi добавлен LLM_MAX_TOKENS=64000.
+- Тесты: +8 (test_iter18.py: truncated→LLMError/ретрай-успех, gist с
+  thinking=False, err_code mapping, status_msg с кодом по fixture 403,
+  _reddit_entries/REDDIT_URL_RE/роутинг fetch_feed на API); fake_call во всех
+  тестах получил kwarg thinking; MaxTokensEnv ждёт дефолт из env (в проде
+  64000). Регрессия 138/138: sqlite Mac + PG docker + sqlite Pi.
+- Деплой на Pi: rsync + restart — active; логи показывают кодифицированные
+  ошибки (`FAIL … [HTTP_403]`). Боевая проверка mega-вызова на Pi (ручной
+  build_delta по живой дельте, без отправки): 92 пункта → 17 338 символов,
+  сводка полная, с корректным финалом (раньше этот кейс резался до 613).
+
 ## 2026-09-23 — iter-17: детерминированный заголовок «ГЛАВНОЕ ЗА ПЕРИОД (…)»
 
 - **Фидбек пользователя**: пропал первый заголовок сводки. Разбор по прод-базе

@@ -16,7 +16,7 @@ from pipeline.channels import _post_num, parse_page  # R6: боевой скре
 from pipeline.config import MAX_ARTICLES_PER_FEED
 
 from . import config, db
-from .collectors.http import http_get
+from .collectors.http import err_code, http_get
 
 log = logging.getLogger("bot.collect")
 
@@ -123,10 +123,85 @@ def fetch_url(kind: str, url: str) -> str:
 
 # --- rss (+ reddit-фиды — тот же путь, D28) --------------------------------------
 
+# iter-18: Reddit блокирует датацентр/VPN-IP на уровне сети (403 Blocked/429
+# на .rss с любого клиента — проверено 2026-09-23 с Pi: curl/httpx/h2/jina).
+# Обход — официальный OAuth API (client_credentials): api с токеном из-под
+# блока пускает. Без REDDIT_CLIENT_ID/SECRET — прежний путь .rss.
+REDDIT_URL_RE = re.compile(r"reddit\.com/r/([A-Za-z0-9_]+)(?:/([a-z]+))?/")
+_reddit_token: str | None = None
+
+
+def _reddit_oauth_token() -> str:
+    global _reddit_token
+    if _reddit_token:
+        return _reddit_token
+    resp = httpx.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(config.REDDIT_CLIENT_ID, config.REDDIT_CLIENT_SECRET),
+        data={"grant_type": "client_credentials"},
+        headers={"User-Agent": config.REDDIT_USER_AGENT},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    _reddit_token = resp.json()["access_token"]
+    return _reddit_token
+
+
+def _reddit_entries(data: dict) -> list[dict]:
+    """JSON листинга reddit → feedparser-подобные записи (чистая функция —
+    тестируется без сети)."""
+    entries = []
+    for child in data.get("data", {}).get("children", []):
+        d = child.get("data", {})
+        title = (d.get("title") or "").strip()
+        permalink = d.get("permalink") or ""
+        if not title or not permalink:
+            continue
+        entries.append({
+            "title": title,
+            "link": f"https://www.reddit.com{permalink}",
+            "published_parsed": (time.gmtime(d["created_utc"])
+                                 if d.get("created_utc") else None),
+            "summary": d.get("selftext") or "",
+        })
+    return entries
+
+
+def fetch_reddit_api(url: str):
+    """RSS-URL сабреддита → OAuth JSON API (iter-18). Возвращает (title,
+    entries), как fetch_feed. 401 — токен протух: один перевыпуск."""
+    global _reddit_token
+    m = REDDIT_URL_RE.search(url)
+    if not m:
+        raise RuntimeError(f"не распознан URL сабреддита: {url}")
+    name, sort = m.group(1), m.group(2) or "hot"
+    for attempt in (1, 2):
+        resp = httpx.get(
+            f"https://oauth.reddit.com/r/{name}/{sort}",
+            params={"limit": MAX_ARTICLES_PER_FEED, "raw_json": 1},
+            headers={"Authorization": f"Bearer {_reddit_oauth_token()}",
+                     "User-Agent": config.REDDIT_USER_AGENT},
+            timeout=30,
+        )
+        if resp.status_code == 401 and attempt == 1:
+            _reddit_token = None
+            continue
+        resp.raise_for_status()
+        entries = _reddit_entries(resp.json())
+        if not entries:
+            raise RuntimeError("reddit API вернул пустой список постов")
+        return f"r/{name}", entries
+    raise RuntimeError("reddit API: повторный 401 после перевыпуска токена")
+
+
 def fetch_feed(url: str):
     """Скачать и распарсить RSS/Atom через retry-обёртку (NFR-04).
     Возвращает (title, entries); bozo-проверка как в R3; HTML-мусор без
-    элементов — ошибка (TC-12)."""
+    элементов — ошибка (TC-12). iter-18: reddit-URL при заданных
+    REDDIT_CLIENT_ID/SECRET уходит в OAuth API (сетевой блок .rss)."""
+    if ("reddit.com/r/" in url and config.REDDIT_CLIENT_ID
+            and config.REDDIT_CLIENT_SECRET):
+        return fetch_reddit_api(url)
     response = http_get(url)
     parsed = feedparser.parse(response.content)
     if parsed.bozo and not parsed.entries:
@@ -309,9 +384,10 @@ def collect_enabled(conn, chat_id):
                 failed_url = fetch_url(row["kind"], row["url"])
             except Exception:
                 failed_url = row["url"]
-            log.error("FAIL %s: %r", failed_url, exc)
+            log.error("FAIL %s [%s]: %r", failed_url, err_code(exc), exc)
             status = "degraded" if row["kind"] in DEGRADED_KINDS else "error"
-            db.set_source_status(lconn, row["id"], status, str(exc)[:200])
+            db.set_source_status(lconn, row["id"], status,
+                                 f"[{err_code(exc)}] {exc}"[:200])
             return 0, (failed_url, exc)
 
     if pool_rows:

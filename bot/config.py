@@ -23,6 +23,12 @@ TGWEB_URL_TEMPLATE = os.environ.get("BOT_TGWEB_URL_TEMPLATE", "https://t.me/s/{n
 REDDIT_RSS_TEMPLATE = os.environ.get(
     "BOT_REDDIT_RSS_TEMPLATE", "https://www.reddit.com/r/{name}/new/.rss"
 )
+# iter-18: OAuth Reddit (сетевой блок .rss с датацентр/VPN-IP); пусто — .rss
+REDDIT_CLIENT_ID = os.environ.get("REDDIT_CLIENT_ID", "")
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET", "")
+REDDIT_USER_AGENT = os.environ.get(
+    "REDDIT_USER_AGENT", "personal-news-digest/1.0"
+)
 
 # М2: Supabase Postgres (transaction pooler) — задан → бот работает на PG
 # вместо sqlite (BOT_DB_PATH принудительно возвращает sqlite, TC-45).

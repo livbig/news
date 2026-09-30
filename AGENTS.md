@@ -1,10 +1,12 @@
 # News Digest Pipeline
 
 Личный агрегатор новостей: источники (RSS/TG-каналы/HTML/X-мост/Reddit) →
-Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мега-дайджест
-(Z.ai GLM-5.3, флагманская линейка D41) → Telegram-бот. ОДИН пользователь
-(D40): гейт `allowed()` на TELEGRAM_CHAT_ID; мультипользовательность
-отклонена.
+Supabase Postgres (М2; bot.db SQLite — архив/откат; RLS включён на всех
+public-таблицах, iter-19) → LLM-мега-дайджест (DeepSeek-V4.1-Flash
+`deepseek-flash`, effort=max — iter-19; до этого Z.ai GLM-5.3) →
+Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` на TELEGRAM_CHAT_ID
++ outer-middleware на диспетчере (fail-closed, iter-19);
+мультипользовательность отклонена.
 
 Вся документация, комментарии и логи проекта — на русском; новые тексты
 (доки, комментарии, сообщения бота) тоже пиши по-русски.
@@ -19,19 +21,29 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
     TELEGRAM_TOKEN_DEV приоритетнее прод-токена (D24).
   - `db.py` — слой БД: Supabase Postgres, если задан SUPABASE_DB_URL; sqlite
     `bot.db` иначе/при BOT_DB_PATH; ':memory:' в BOT_TEST_PG_URL — временная
-    схема в тестовом PG.
+    схема в тестовом PG. iter-19: `consumed_keys` + фильтр в `pending_items`
+    — детерминированный анти-дедуп прямых повторов между сводками.
   - `collect.py` — коллекторы всех типов: rss (+reddit-фиды D28), html (bs4),
     tgweb (скрейпер t.me/s, R6), twitter (RSS-мост, N4). Изоляция отказов
     (NFR-02): сбой одного источника — в лог и status='error', остальные
     собираются.
   - `collectors/http.py` — httpx + ретраи: сеть/5xx/429 → 3 повтора,
     backoff 1→2→4 с, таймауты connect 15/read 30; прочие 4xx — сразу
-    исключение (A2, NFR-04).
+    исключение (A2, NFR-04). `err_code` (iter-18) — короткие коды причин
+    (HTTP_403/TIMEOUT/NETWORK/…): логи `FAIL url [КОД]`, sources.status_msg
+    начинается с `[КОД]`.
+  - Reddit (iter-18): VPN/датацентр-IP блокируются Reddit на уровне сети
+    (403 Blocked/429 на .rss) — при заданных REDDIT_CLIENT_ID/SECRET сбор
+    идёт через OAuth JSON API (collect.fetch_reddit_api, перевыпуск токена
+    по 401); без ключей — прежний .rss. Решение пользователя 2026-09-23:
+    Reddit НЕ парсим — оба источника (r/investing, r/wallstreetbets)
+    отключены (enabled=0); OAuth-код dormant.
   - `digest.py` — сборка дайджеста: дельта окна потребления, вход для
     mega-вызова, mock для dev-прогона.
   - `llm.py` — SYSTEM_PROMPT дайджеста (согласован с пользователем дословно,
     НЕ редактировать без пользователя), LLMError, suggest_sources; боевой
-    клиент — `pipeline/llm.py::_call` (стриминг, anthropic-messages).
+    клиент — `pipeline/llm.py::_call` (стриминг, anthropic-messages;
+    iter-19 — DeepSeek).
   - `enrich.py` — iter-14b: фоновая докачка полных текстов (trafilatura,
     ленивый импорт), неудача — enriched=2, без ретраев.
   - `interview.py` — LLM-интервью онбординга (11d/D45).
@@ -42,14 +54,16 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   - `handlers/` — роутеры: `onboarding.py` (интервью → профиль → подбор
     источников → расписание), `sources.py` (CRUD + мастер добавления всех
     типов), `settings.py` (расписание), `menu.py` (/digest, /stats,
-    «сводка сейчас»), `__init__.py` (Dispatcher, run).
+    «сводка сейчас»), `__init__.py` (Dispatcher, run;
+    `_AllowedOnlyMiddleware` — внешний гейт единственного пользователя
+    до роутеров, iter-19).
   - `keyboards.py`, `states.py`, `tgsend.py` — клавиатуры (пагинация по 30),
     FSM-состояния, отправка в Telegram (mock при chat_id=0 → stdout).
 - `pipeline/` — старый CLI-бот (код сохранён, откат И7): `run/digest/check/
   chatid`, своя `news.db` (только на Mac), feeds.txt. Не путать с `bot/`.
 - `scripts/migrate_sqlite_to_pg.py` — одноразовый перенос bot.db → Supabase
   (идемпотентен, ON CONFLICT DO NOTHING).
-- `tests/` — `test_iter1..7,10,11.py` + `fakes.py`; план — `TESTPLAN.md`
+- `tests/` — `test_iter1..7,10,11,18,19.py` + `fakes.py`; план — `TESTPLAN.md`
   (приватный, не публикуется).
 - `docs/` — `requirements.md` (FR-01…20, NFR-01…07), `plan.md` (решения
   D1…D55, схема БД, FSM), `reconciliation.md`.
@@ -65,10 +79,14 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   BOT_COLLECT_INTERVAL=1800 c собирает все источники (rss/html/twitter — пул
   6 воркеров, tgweb строго последовательно с паузами); prep перед слотом —
   только LLM. `/digest` и «сводка сейчас» собирают по-прежнему.
-- **Дайджест**: один mega-вызов GLM-5.3 (D42), системный промпт согласован
-  дословно (bot/llm.py, не редактировать без пользователя; формат
+- **Дайджест**: один mega-вызов (D42) — с iter-19 (2026-09-30) DeepSeek
+  `deepseek-flash` = V4.1-Flash (1М контекст, anthropic-эндпоинт
+  api.deepseek.com/anthropic; до этого Z.ai GLM-5.3), системный промпт
+  согласован дословно (bot/llm.py, не редактировать без пользователя; формат
   заголовков/пунктов ревизован 2026-09-20: заголовки разделов капсом+эмодзи,
-  пункты без буллетов, пункт ≤~240 симв. и всегда короче источника, iter-15),
+  пункты без буллетов, пункт ≤~240 симв. и всегда короче источника, iter-15;
+  ревизия 2026-09-30: СИНТЕЗ — роль эксперта по экономике/политике/
+  инвестициям + строка о недопустимости прямых повторов, iter-19),
   формат 3-4 сообщения, у каждого пункта эмодзи-ссылка на первоисточник
   (D43); вход — per-source бюджет BOT_DIGEST_PER_SOURCE=15, кап
   BOT_DIGEST_MAX_ITEMS=800 (window ROW_NUMBER); пункт идёт с «ВЫЖИМКА:»
@@ -81,6 +99,18 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   «🎯 ГЛАВНОЕ ЗА ПЕРИОД (даты)» от кода (bot/digest.py::_period_header,
   период = db.digest_period от users.last_sent_at; LLM лид форматировала
   нестабильно — утечка метки «Лид:», пропавший заголовок).
+  iter-18: stop_reason=max_tokens = сбой (LLMTruncatedError), НЕ сводка —
+  инцидент 2026-09-23 (flash мыслила поверх budget_tokens, ушло 613 симв.);
+  gist (make_gist) и chat вызываются с thinking=False (thinking съедал малые
+  max_tokens — map-стадия теряла выжимки весь день); LLM_MAX_TOKENS=64000.
+  iter-19 (особенности DeepSeek): thinking ВКЛЮЧЁН по умолчанию —
+  `thinking=False` шлёт ЯВНЫЙ `{"type":"disabled"}`; `budget_tokens`
+  игнорируется, усилие мышления — LLM_EFFORT=max → `output_config.effort`
+  (low/high/max; решение пользователя — максимум); анти-дедуп прямых
+  повторов — `db.consumed_keys` (url+нормализованные заголовки прошлых
+  сводок, окно = жизнь items) + фильтр в `db.pending_items` (дубли внутри
+  выборки выигрывает свежая копия; развитие темы с другой формулировкой
+  не режется).
 - **Полные тексты (iter-14)**: TG-посты и content фидов пишутся в
   items.text (кап BOT_ITEM_TEXT_CAP=4000); недостающее докачивается фоном
   в collect_loop (bot/enrich.py: trafilatura, BOT_ENRICH_*) и сжимается
@@ -112,8 +142,8 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
 - `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
 - `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` —
   регрессия на sqlite; без пустого префикса `:memory:` тестов идёт в PG
-  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 130/130
-  (iter-17, 2026-09-23, sqlite Mac + PG docker news-pg).
+  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 149/149
+  (iter-19, 2026-09-30, sqlite Mac + PG docker news-pg + sqlite Pi).
 - `python3 scripts/migrate_sqlite_to_pg.py` — перенос bot.db → Supabase (идемпотентен)
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.
@@ -124,8 +154,10 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   Dispatcher через `dp.feed_update` (без сети); `FakeBot(Bot)` перехватывает
   `bot.__call__` и валидирует HTML parse_mode; все коллекторы и LLM гоняются
   против локального fixture-сервера; реальные ключи из .env в тестах
-  обнуляются (config.TOKEN/ALLOWED_CHAT_ID). Один Dispatcher на модуль —
-  aiogram-роутеры не подключаются повторно.
+  обнуляются (config.TOKEN/ALLOWED_CHAT_ID — гейт в таком режиме открыт,
+  iter-19). Один Dispatcher на модуль — aiogram-роутеры не подключаются
+  повторно. Тесты с «боевым» TOKEN=test обязаны ставить и ALLOWED_CHAT_ID
+  (fail-closed, iter-19).
 - Два режима БД: sqlite (по умолчанию в CI) и Postgres через BOT_TEST_PG_URL
   (`:memory:` → временная схема). Прогонять оба.
 - Приёмка диалоговых сценариев — ручная, в чате с dev-ботом
@@ -182,8 +214,8 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
   (nft); краш awg-go → интерфейс исчезает, правила остаются, трафик НЕ утекает
   в домашний IP (проверено kill -9: блокировка до автоперезапуска ~5 c).
 - Регрессия на Pi: `cd ~/news && BOT_TEST_PG_URL= venv/bin/python -m unittest
-  discover -s tests -p "test_iter*.py"` → 130/130 (2026-09-23, iter-17; до этого
-  128/128 на iter-16); PG-смоук через туннель — OK.
+  discover -s tests -p "test_iter*.py"` → 149/149 (2026-09-30, iter-19; до этого
+  138/138 на iter-18); PG-смоук через туннель — OK.
 - Откат на Mac (cold standby): plist `com.fifth.newsbot` сохранён, launchd
   disabled. Порядок: на Pi `sudo systemctl stop --now newsbot` (ЕДИНСТВЕННЫЙ
   getUpdates) → на Mac `launchctl enable gui/501/com.fifth.newsbot` →
@@ -232,10 +264,13 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
 - `feeds.txt` — строки `URL|категория` (для старого pipeline). Категории:
   `metals_fx, usmarket, wsb, ipo_ai_bio, tech_ai, macro, geopolitics, crypto`
 - `.env` — ключи (полный список с комментариями в `.env.example`):
-  LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_THINKING, LLM_MAX_TOKENS,
+  LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_THINKING, LLM_EFFORT,
+  LLM_MAX_TOKENS,
   TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOKEN_DEV (держать пустым в
   проде — приоритетнее прод-токена), SUPABASE_DB_URL, BOT_* (интервалы,
-  бюджеты, retention). Зависимости — `requirements.txt` (aiogram 3.31,
+  бюджеты, retention), REDDIT_CLIENT_ID/SECRET/USER_AGENT (iter-18: OAuth
+  против сетевого блока .rss; пусто — прежний .rss). Зависимости —
+  `requirements.txt` (aiogram 3.31,
   httpx, feedparser, beautifulsoup4, psycopg[binary] 3, trafilatura).
 
 ## Критерии успеха (проверять при каждом изменении)
@@ -251,6 +286,10 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
 7. Онбординг-интервью при недоступной LLM даёт fallback (дефолт-профиль + каталог).
 8. Retention: items >10 дней исчезают и не возвращаются (seen_hashes); старые digests/chat_history чистятся.
 9. `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` зелёный на sqlite и на PG.
+10. Прямые повторы новостей не попадают в сводку повторно (db.consumed_keys,
+    iter-19); развитие темы с новой формулировкой — не повтор.
+11. Чужой chat_id не получает от бота ничего (outer-middleware + allowed(),
+    fail-closed; D40/iter-19).
 
 ## Принципы
 
@@ -259,7 +298,8 @@ Supabase Postgres (М2; bot.db SQLite — архив/откат) → LLM-мег�
 
 ## Приоритеты пользователя (дефолт-профиль, до LLM-интервью онбординга)
 
-- Глубоко: драгметаллы (Au, Pt, Pd), USD/RUB, рынок США, инвест-идеи (вкл. wallstreetbets),
+- Глубоко: драгметаллы (Au, Pt, Pd), валюты (USD/RUB — главное; EUR, CNY,
+  JPY — в паре с USD), рынок США, инвест-идеи (вкл. wallstreetbets),
   IPO и акции AI/робототехники/биотеха, новые AI-модели, промпт-инжиниринг
 - Кратко: геополитика (только направление, «в какую сторону весы»)
 - Очень кратко: крипта

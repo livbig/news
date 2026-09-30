@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from aiogram import Bot, Dispatcher
+from aiogram import BaseMiddleware, Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .. import config
@@ -10,6 +10,28 @@ from ..scheduler import collect_loop, fsm_sweeper, retention_loop, slots_loop
 from . import menu, onboarding, settings, sources
 
 log = logging.getLogger("bot.handlers")
+
+
+class _AllowedOnlyMiddleware(BaseMiddleware):
+    """Внешний гейт единственного пользователя (iter-19): отсекает апдейты
+    чужих чатов ДО роутеров — закрывает и FSM-хендлеры без своего allowed()
+    (попасть в состояние чужому неоткуда, но точечные проверки легко
+    потерять при добавлении хендлеров). Per-handler allowed() в роутерах
+    остаётся вторым контуром."""
+
+    async def __call__(self, handler, event, data):
+        chat = getattr(event, "chat", None)  # Message
+        if chat is None:  # CallbackQuery
+            msg = getattr(event, "message", None)
+            chat = msg.chat if msg is not None else None
+        chat_id = chat.id if chat is not None else None
+        if chat_id is None:  # колбэк без message — по отправителю
+            user = getattr(event, "from_user", None)
+            chat_id = user.id if user is not None else None
+        if chat_id is not None and not onboarding.allowed(chat_id):
+            log.warning("Апдейт чужого чата %s отклонён гейтом", chat_id)
+            return
+        return await handler(event, data)
 
 
 def init(connection):
@@ -27,6 +49,8 @@ def build_dispatcher(storage=None):
     global _dispatcher
     if _dispatcher is None:
         _dispatcher = Dispatcher(storage=storage or MemoryStorage())
+        _dispatcher.message.outer_middleware(_AllowedOnlyMiddleware())
+        _dispatcher.callback_query.outer_middleware(_AllowedOnlyMiddleware())
         _dispatcher.include_router(onboarding.router)  # команды и FSM-опрос — раньше прочих
         _dispatcher.include_router(sources.router)  # CRUD источников и мастер добавления
         _dispatcher.include_router(settings.router)  # настройки расписания

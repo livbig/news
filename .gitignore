@@ -8,3 +8,4 @@ bot.db
 .vercel/
 .kimi-code/plans/
 vpn.conf
+.DS_Store

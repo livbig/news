@@ -37,7 +37,12 @@ GREETING = (
 
 
 def allowed(chat_id) -> bool:
-    return not config.ALLOWED_CHAT_ID or str(chat_id) == config.ALLOWED_CHAT_ID
+    """Гейт единственного пользователя (D40). Открыт только в dev/mock-режиме
+    (нет ни токена, ни chat_id — тесты, прогон в stdout). Боевой бот (TOKEN
+    задан) без TELEGRAM_CHAT_ID — fail-closed: закрыт для всех (iter-19)."""
+    if config.ALLOWED_CHAT_ID:
+        return str(chat_id) == config.ALLOWED_CHAT_ID
+    return not config.TOKEN
 
 
 def _touch(chat_id: int, user_id: int) -> None:

@@ -47,3 +47,15 @@ def http_get(url: str, *, headers: dict | None = None) -> httpx.Response:
             )
             _sleep(pause)
     raise last_exc
+
+
+def err_code(exc: BaseException) -> str:
+    """Короткий код причины сбоя для логов и sources.status (iter-18): дебаг
+    по коду без чтения traceback — HTTP_403/HTTP_429/TIMEOUT/NETWORK/PARSE…"""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP_{exc.response.status_code}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "TIMEOUT"
+    if isinstance(exc, httpx.TransportError):
+        return "NETWORK"
+    return type(exc).__name__.upper()

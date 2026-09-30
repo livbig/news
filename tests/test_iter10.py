@@ -85,11 +85,14 @@ class ChatCase(unittest.TestCase):
         tgsend._post = lambda text, chat_id, parse_mode: (
             self.sent.append((text, parse_mode)), True)[1]
         tgsend.config.TOKEN = "test"
+        # fail-closed гейт (iter-19): боевой токен требует и chat_id владельца
+        tgsend.config.ALLOWED_CHAT_ID = str(self.CHAT)
 
     def tearDown(self):
         from bot import tgsend
         tgsend._post = self._real_post
         tgsend.config.TOKEN = ""
+        tgsend.config.ALLOWED_CHAT_ID = ""
 
     def feed(self, **event):
         self._update_id += 1

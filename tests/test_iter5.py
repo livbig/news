@@ -234,10 +234,13 @@ class TC29MockDigest(ChatCase):
         tgsend._post = lambda text, chat_id, parse_mode: (
             self.sent.append((text, parse_mode)), True)[1]
         tgsend.config.TOKEN = "test"
+        # fail-closed гейт (iter-19): боевой токен требует и chat_id владельца
+        tgsend.config.ALLOWED_CHAT_ID = str(self.CHAT)
 
     def tearDown(self):
         self.tgsend._post = self._real_post
         self.tgsend.config.TOKEN = ""
+        self.tgsend.config.ALLOWED_CHAT_ID = ""
 
     def test_one_message_russian_links(self):
         self.db.add_source(self.conn(), self.CHAT, "rss", f"{BASE}/valid.xml", "Valid Feed")
@@ -331,7 +334,7 @@ class TC31LLMRetries(unittest.TestCase):
         self.pconfig.LLM_API_KEY = "test-key"  # без ключа summarize не дойдёт до _call
         seen: list[tuple] = []
 
-        def fake_call(system, messages, max_tokens, read_timeout=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
             seen.append((max_tokens, read_timeout))
             raise httpx.ConnectTimeout("no route")
 
@@ -404,11 +407,14 @@ class TC32LLMErrorReport(ChatCase):
         tgsend._post = lambda text, chat_id, parse_mode: (
             self.sent.append((text, parse_mode)), True)[1]
         tgsend.config.TOKEN = "test"
+        # fail-closed гейт (iter-19): боевой токен требует и chat_id владельца
+        tgsend.config.ALLOWED_CHAT_ID = str(self.CHAT)
         self._real_summarize = llm.summarize
 
     def tearDown(self):
         self.tgsend._post = self._real_post
         self.tgsend.config.TOKEN = ""
+        self.tgsend.config.ALLOWED_CHAT_ID = ""
         from bot import llm
         llm.summarize = self._real_summarize
 

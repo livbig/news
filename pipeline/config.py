@@ -31,6 +31,7 @@ LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api.z.ai/api/paas/v4")
 LLM_MODEL = os.environ.get("LLM_MODEL", "glm-5.3")
 LLM_THINKING = os.environ.get("LLM_THINKING", "")  # сырой JSON поля thinking (пусто → не слать)
+LLM_EFFORT = os.environ.get("LLM_EFFORT", "")  # iter-19: reasoning effort → output_config.effort (low/high/max; пусто → не слать)
 
 MAX_ARTICLES_PER_FEED = 60
 

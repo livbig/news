@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -534,15 +535,50 @@ def user_settings(conn, chat_id):
 
 # --- И4: окно дельты (D26) и расписание (FR-10..FR-12) ------------------------
 
+_TITLE_NORM = re.compile(r"\W+", re.UNICODE)
+
+
+def _norm_title(title) -> str:
+    """Нормализация заголовка для анти-дедупа (iter-19): регистр и вся
+    небуквенная обвязка не важны — ловим ПРЯМЫЕ повторы новости; развивающаяся
+    тема с переформулированным заголовком дедупом не затрагивается."""
+    return _TITLE_NORM.sub(" ", (title or "").lower()).strip()
+
+
+def consumed_keys(conn, chat_id) -> tuple:
+    """(urls, нормализованные заголовки) пунктов, уже ушедших в сводки чата
+    (iter-19). Окно — жизнь items (retention 10 дн): удалённые пункты из
+    выборки выпадают сами."""
+    urls, titles = set(), set()
+    rows = conn.execute(
+        "SELECT i.title, i.url FROM digest_items di"
+        " JOIN digests d ON d.id=di.digest_id"
+        " JOIN items i ON i.id=di.item_id WHERE d.chat_id=%s",
+        (chat_id,),
+    ).fetchall()
+    for row in rows:
+        url = (row[1] or "").strip()
+        title = _norm_title(row[0])
+        if url:
+            urls.add(url)
+        if title:
+            titles.add(title)
+    return urls, titles
+
+
 def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
     """Непотреблённые элементы чата: не входившие ни в одну сводку чата
     (digest_items). published не фильтрует окно (даты фидов ненадёжны,
     D26) — только сортировка, свежие первыми. iter-11b: плоский LIMIT 50
     заменён per-source бюджетом (BOT_DIGEST_PER_SOURCE) + общим капом
-    (BOT_DIGEST_MAX_ITEMS) — «болтливый» фид не съедает дайджест."""
+    (BOT_DIGEST_MAX_ITEMS) — «болтливый» фид не съедает дайджест.
+    iter-19: детерминированный анти-дедуп прямых повторов — отсекаются
+    пункты с url/заголовком, уже ушедшими в прошлые сводки (consumed_keys),
+    и дубли внутри самой выборки (та же новость из нескольких источников);
+    свежая копия (сортировка published DESC) выигрывает."""
     per_source = per_source if per_source is not None else config.DIGEST_PER_SOURCE
     limit = limit if limit is not None else config.DIGEST_MAX_ITEMS
-    return conn.execute(
+    rows = conn.execute(
         "SELECT id, title, url, text, gist FROM ("
         "  SELECT i.id, i.title, i.url, i.text, i.gist, i.published,"
         "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
@@ -554,6 +590,19 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
         ") t WHERE rn <= %s ORDER BY published DESC, id DESC LIMIT %s",
         (chat_id, chat_id, per_source, limit),
     ).fetchall()
+    seen_urls, seen_titles = consumed_keys(conn, chat_id)
+    out = []
+    for row in rows:
+        url = (row["url"] or "").strip()
+        title = _norm_title(row["title"])
+        if (url and url in seen_urls) or (title and title in seen_titles):
+            continue
+        if url:
+            seen_urls.add(url)
+        if title:
+            seen_titles.add(title)
+        out.append(row)
+    return out
 
 
 def enrich_targets(conn, limit) -> list:
