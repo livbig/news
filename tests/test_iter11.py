@@ -272,7 +272,8 @@ class DigestPrompt(unittest.TestCase):
 
         calls = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             calls["system"] = system
             calls["messages"] = messages
             calls["max_tokens"] = max_tokens
@@ -411,7 +412,8 @@ class BuildDeltaWrapsNews(unittest.TestCase):
 
         calls = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             calls["system"] = system
             calls["messages"] = messages
             return "Лид."
@@ -466,7 +468,8 @@ class ItemTextLevel1(unittest.TestCase):
 
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["user"] = messages[0]["content"]
             return "Лид."
 
@@ -601,7 +604,8 @@ class MapLevel3(unittest.TestCase):
 
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["user"] = messages[0]["content"]
             return "Лид."
 
@@ -633,7 +637,8 @@ class MapLevel3(unittest.TestCase):
         self.assertEqual(_db.map_targets(conn, 25), [])  # повторно не выбирается
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["user"] = messages[0]["content"]
             return "Лид."
 
@@ -817,7 +822,8 @@ class SuggestSourcesUnit(unittest.TestCase):
                 "мусор"]                                             # не dict
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["user"] = messages[0]["content"]
             return "Вот источники: " + json.dumps(raw)
 
@@ -1081,7 +1087,8 @@ class InterestsReachPrompt(unittest.TestCase):
         db.insert_item(conn, sid, "http://ex.test/1", "Новость", "2026-09-10T00:00:00Z")
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["system"] = system
             return "Лид."
 

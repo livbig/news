@@ -3,7 +3,8 @@
 Личный агрегатор новостей: источники (RSS/TG-каналы/HTML/X-мост/Reddit) →
 Supabase Postgres (М2; bot.db SQLite — архив/откат; RLS включён на всех
 public-таблицах, iter-19) → LLM-мега-дайджест (DeepSeek-V4.1-Flash
-`deepseek-flash`, effort=max — iter-19; до этого Z.ai GLM-5.3) →
+`deepseek-flash`, effort=max — iter-19; до этого Z.ai GLM-5.3; iter-20:
+ретрай-лестница max→high при обрезке, LLM_MAX_TOKENS=96000) →
 Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` на TELEGRAM_CHAT_ID
 + outer-middleware на диспетчере (fail-closed, iter-19);
 мультипользовательность отклонена.
@@ -63,7 +64,7 @@ Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` �
   chatid`, своя `news.db` (только на Mac), feeds.txt. Не путать с `bot/`.
 - `scripts/migrate_sqlite_to_pg.py` — одноразовый перенос bot.db → Supabase
   (идемпотентен, ON CONFLICT DO NOTHING).
-- `tests/` — `test_iter1..7,10,11,18,19.py` + `fakes.py`; план — `TESTPLAN.md`
+- `tests/` — `test_iter1..7,10,11,18,19,20.py` + `fakes.py`; план — `TESTPLAN.md`
   (приватный, не публикуется).
 - `docs/` — `requirements.md` (FR-01…20, NFR-01…07), `plan.md` (решения
   D1…D55, схема БД, FSM), `reconciliation.md`.
@@ -102,7 +103,13 @@ Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` �
   iter-18: stop_reason=max_tokens = сбой (LLMTruncatedError), НЕ сводка —
   инцидент 2026-09-23 (flash мыслила поверх budget_tokens, ушло 613 симв.);
   gist (make_gist) и chat вызываются с thinking=False (thinking съедал малые
-  max_tokens — map-стадия теряла выжимки весь день); LLM_MAX_TOKENS=64000.
+  max_tokens — map-стадия теряла выжимки весь день); LLM_MAX_TOKENS=64000
+  (iter-20: 96000).
+  iter-20 (2026-10-01, инцидент: сводка 09:00 не пришла — effort=max дважды
+  выжег 64000 выходных токенов на thinking без текста): ретрай-лестница в
+  bot/llm.py — вторая попытка после LLMTruncatedError идёт с effort=high
+  (реплей боевого входа: max — 54.8k выходных токенов, high — 30.9k);
+  LLM_MAX_TOKENS=96000 (потолок модели 384K).
   iter-19 (особенности DeepSeek): thinking ВКЛЮЧЁН по умолчанию —
   `thinking=False` шлёт ЯВНЫЙ `{"type":"disabled"}`; `budget_tokens`
   игнорируется, усилие мышления — LLM_EFFORT=max → `output_config.effort`
@@ -142,8 +149,8 @@ Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` �
 - `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
 - `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` —
   регрессия на sqlite; без пустого префикса `:memory:` тестов идёт в PG
-  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 149/149
-  (iter-19, 2026-09-30, sqlite Mac + PG docker news-pg + sqlite Pi).
+  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 153/153
+  (iter-20, 2026-10-01, sqlite Mac + PG docker news-pg + sqlite Pi).
 - `python3 scripts/migrate_sqlite_to_pg.py` — перенос bot.db → Supabase (идемпотентен)
 
 Лог работы: `LOG.md` — обновлять при каждой итерации.
@@ -214,8 +221,8 @@ Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` �
   (nft); краш awg-go → интерфейс исчезает, правила остаются, трафик НЕ утекает
   в домашний IP (проверено kill -9: блокировка до автоперезапуска ~5 c).
 - Регрессия на Pi: `cd ~/news && BOT_TEST_PG_URL= venv/bin/python -m unittest
-  discover -s tests -p "test_iter*.py"` → 149/149 (2026-09-30, iter-19; до этого
-  138/138 на iter-18); PG-смоук через туннель — OK.
+  discover -s tests -p "test_iter*.py"` → 153/153 (2026-10-01, iter-20; до этого
+  149/149 на iter-19, 138/138 на iter-18); PG-смоук через туннель — OK.
 - Откат на Mac (cold standby): plist `com.fifth.newsbot` сохранён, launchd
   disabled. Порядок: на Pi `sudo systemctl stop --now newsbot` (ЕДИНСТВЕННЫЙ
   getUpdates) → на Mac `launchctl enable gui/501/com.fifth.newsbot` →
@@ -297,7 +304,7 @@ Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` �
 
 ## Принципы
 
-Следуй karpathy-guidelines.md (в корне репозитория): минимальный diff, никаких
+Следуй `~/Desktop/ai/karpathy-guidelines.md`: минимальный diff, никаких
 спекулятивных абстракций, каждое изменение сопровождается прогоном критериев выше.
 
 ## Приоритеты пользователя (дефолт-профиль, до LLM-интервью онбординга)

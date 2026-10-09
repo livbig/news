@@ -47,14 +47,16 @@ class LLMTruncatedError(RuntimeError):
 
 
 def _call(system: str, messages: list[dict], max_tokens: int,
-          read_timeout: float = 300.0, thinking: bool = True) -> str:
+          read_timeout: float = 300.0, thinking: bool = True,
+          effort: str | None = None) -> str:
     """Стриминговый вызов: длинные генерации не упираются в read-timeout.
     thinking=False — мышление отключается ЯВНО (iter-19, DeepSeek: thinking
     включён по умолчанию; короткие служебные вызовы с малым max_tokens иначе
     отдают пустой text-блок — map-стадия массово теряла выжимки 2026-09-23).
     thinking=True: поле thinking — из LLM_THINKING (сырой JSON), усилие —
     output_config.effort из LLM_EFFORT (iter-19; budget_tokens DeepSeek
-    игнорирует)."""
+    игнорирует). effort — переопределение усилия на один вызов (None — из
+    конфига; iter-20: ретрай-лестница в bot.llm.summarize)."""
     payload = {
         "model": config.LLM_MODEL,
         "max_tokens": max_tokens,
@@ -65,8 +67,9 @@ def _call(system: str, messages: list[dict], max_tokens: int,
     if thinking:
         if config.LLM_THINKING:  # iter-15: LLM_THINKING — сырой JSON
             payload["thinking"] = json.loads(config.LLM_THINKING)
-        if config.LLM_EFFORT:  # iter-19: low/high/max (max = максимум)
-            payload["output_config"] = {"effort": config.LLM_EFFORT}
+        chosen = config.LLM_EFFORT if effort is None else effort
+        if chosen:  # iter-19: low/high/max (max = максимум)
+            payload["output_config"] = {"effort": chosen}
     else:
         payload["thinking"] = {"type": "disabled"}
     parts: list[str] = []

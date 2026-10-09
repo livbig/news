@@ -334,7 +334,8 @@ class TC31LLMRetries(unittest.TestCase):
         self.pconfig.LLM_API_KEY = "test-key"  # без ключа summarize не дойдёт до _call
         seen: list[tuple] = []
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             seen.append((max_tokens, read_timeout))
             raise httpx.ConnectTimeout("no route")
 

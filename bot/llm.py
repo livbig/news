@@ -126,16 +126,27 @@ def summarize(items_text: str, interests: str | None = None) -> str:
     LLM пользователю mock НЕ доставляется — 4xx/исчерпание попыток поднимает
     LLMError с причиной, caller шлёт пользователю сообщение о проблеме
     (запрос 2026-09-21). 5xx/таймауты/пустой ответ — 2 попытки с паузой
-    30 с; прочие 4xx — сразу: ретраи бессмысленны (баланс/авторизация)."""
+    30 с; прочие 4xx — сразу: ретраи бессмысленны (баланс/авторизация).
+    iter-20: ретрай-лестница по усилию мышления — вторая попытка после
+    обрезки идёт с effort=high (effort=max на плотном входе требует 55-65k
+    выходных токенов и упирается в потолок; повтор с тем же усилием
+    бессмыслен)."""
     if not pconfig.LLM_API_KEY:
         log.warning("LLM_API_KEY не задан — mock-сводка (dev)")
         return mock_summary(items_text)
     messages = [{"role": "user", "content": items_text}]
     last_exc: Exception | None = None
     for attempt in range(1, ATTEMPTS + 1):
+        # iter-20: после обрезки по max_tokens повтор идёт с меньшим усилием
+        # (None — усилие из LLM_EFFORT). Инцидент 2026-10-01: effort=max дважды
+        # выжег 64000 выходных токенов без текста — тот же запрос не лечится.
+        effort = "high" if isinstance(last_exc, LLMTruncatedError) else None
         try:
+            if effort:
+                log.warning("LLM: повтор с effort=%s после обрезки", effort)
             result = _call(
-                _system_prompt(interests), messages, MAX_TOKENS, read_timeout=READ_TIMEOUT
+                _system_prompt(interests), messages, MAX_TOKENS,
+                read_timeout=READ_TIMEOUT, effort=effort,
             )
             if result.strip():
                 return _normalize(result)

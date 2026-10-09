@@ -59,8 +59,9 @@ class TruncatedIsFailure(unittest.TestCase):
 
         calls = []
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
-            calls.append(1)
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
+            calls.append(effort)
             effect = side_effects[len(calls) - 1]
             if isinstance(effect, Exception):
                 raise effect
@@ -100,7 +101,8 @@ class GistNoThinking(unittest.TestCase):
 
         captured = {}
 
-        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None):
+        def fake_call(system, messages, max_tokens, read_timeout=None, thinking=None,
+                      effort=None):
             captured["thinking"] = thinking
             return "Выжимка сути."
 
