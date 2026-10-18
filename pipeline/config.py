@@ -14,7 +14,9 @@ def load_env(path=None):
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        # iter-21: inline-комментарий шаблона (.env.example) — часть строки, а не
+        # значения: `BOT_MAX_SOURCES=100  # лимит` ломал int() на старте бота.
+        os.environ.setdefault(key.strip(), value.split(" #", 1)[0].strip())
 
 
 load_env()
