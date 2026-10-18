@@ -9,3 +9,6 @@ bot.db
 .kimi-code/plans/
 vpn.conf
 .DS_Store
+tgcloud/lib/secrets.js
+node_modules/
+.tgcloud/

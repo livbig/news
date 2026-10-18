@@ -1,0 +1,4 @@
+{
+  // Mini App не нужен: у бота нет веб-фронтенда, только handlers/ и lib/.
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json"
+}

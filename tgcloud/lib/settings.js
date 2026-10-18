@@ -1,0 +1,45 @@
+// Настройки без секретов (коммитятся). Значения — из .env Python-версии и iter-21.
+// Секреты живут в lib/secrets.js (генерится scripts/build-config.mjs, в git не попадает).
+
+export const SETTINGS = {
+  // --- LLM (R4: максимальное усилие мышления на сводке) ---
+  llm: {
+    baseUrl: 'https://api.deepseek.com/anthropic',
+    model: 'deepseek-flash',
+    maxTokens: 96000,
+    effort: 'max',
+    // DeepSeek: thinking включён по умолчанию, budget_tokens игнорируется (iter-19).
+    thinking: { type: 'enabled' },
+    // Служебные вызовы (выжимка, JSON-подбор, интервью, роутинг) — без мышления:
+    // иначе оно съедает малый max_tokens (iter-18/iter-21).
+    serviceMaxTokens: 4000,
+    attempts: 2,
+    retryPauseMs: 30000,
+  },
+
+  // --- объём сводки (D42/D43 + iter-21) ---
+  digest: {
+    perSource: 15,
+    maxItems: 800,
+    maxChars: 600000,
+    textCap: 1200,
+    itemTextCap: 4000,
+    windowDays: 7, // решение пользователя 2026-10-19: не больше недели
+    firstWindowHours: 24,
+    messageLimit: 4000, // критерий 5
+  },
+
+  collect: {
+    workers: 6,
+    pauseMs: 400, // вежливость к t.me между страницами канала
+    maxPagesPerChannel: 6, // R6 Python-версии
+    requestTimeoutMs: 45000,
+    retries: 3,
+  },
+
+  retention: { itemsDays: 10, days: 30 },
+
+  sources: { max: 100 },
+
+  tz: { offsetMin: 180 }, // Europe/Moscow, как TZ на Pi
+};
