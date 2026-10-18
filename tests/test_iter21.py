@@ -201,5 +201,26 @@ class StreamErrorBecomesLLMError(unittest.TestCase):
         self.assertIn("stream error", str(caught.exception))
 
 
+class GateFailClosed(unittest.TestCase):
+    """bot.handlers._AllowedOnlyMiddleware: без chat_id/from_user — отказ.
+
+    До iter-21 проверка была `chat_id is not None and not allowed(...)`:
+    апдейт, из которого id не извлёкся, проходил в хендлер (fail-open).
+    """
+
+    def test_update_without_identity_is_dropped(self):
+        from bot.handlers import _AllowedOnlyMiddleware
+
+        async def handler(event, data):
+            return "дошло"
+
+        class Event:
+            pass  # ни chat, ни from_user
+
+        middleware = _AllowedOnlyMiddleware()
+        result = asyncio.run(middleware(handler, Event(), {}))
+        self.assertIsNone(result)
+
+
 if __name__ == "__main__":
     unittest.main()

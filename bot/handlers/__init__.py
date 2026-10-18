@@ -28,7 +28,10 @@ class _AllowedOnlyMiddleware(BaseMiddleware):
         if chat_id is None:  # колбэк без message — по отправителю
             user = getattr(event, "from_user", None)
             chat_id = user.id if user is not None else None
-        if chat_id is not None and not onboarding.allowed(chat_id):
+        if chat_id is None:  # ни чата, ни отправителя — не рискуем (fail-closed)
+            log.warning("Апдейт без chat_id/from_user отклонён гейтом")
+            return
+        if not onboarding.allowed(chat_id):
             log.warning("Апдейт чужого чата %s отклонён гейтом", chat_id)
             return
         return await handler(event, data)
@@ -79,6 +82,11 @@ async def setup_commands(bot) -> None:
 async def run():
     bot = Bot(config.TOKEN)
     dp = build_dispatcher()
+    # iter-21: гейт fail-closed не должен отказывать молча — иначе бот жив
+    # (status active), собирает новости и пишет в пустоту; виноват обычно
+    # пустой TELEGRAM_CHAT_ID или подменённый .env при rsync.
+    if config.TOKEN and not config.ALLOWED_CHAT_ID:
+        log.error("Гейт закрыт: TELEGRAM_CHAT_ID пуст — ни один чат не обслужен")
     sweeper = asyncio.create_task(fsm_sweeper(bot, dp.storage))
     slots = asyncio.create_task(slots_loop(onboarding.conn))
     collector = asyncio.create_task(collect_loop(onboarding.conn))  # 11c/D44
