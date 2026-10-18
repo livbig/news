@@ -183,9 +183,12 @@ async def slots_once(conn, now: datetime | None = None) -> list[int]:
                     _state[chat_id] = prep
                     _retry[chat_id] = now + timedelta(seconds=SEND_RETRY)
             continue
-        # catch-up (FR-12): слот давно прошёл — одна сводка за всё окно
+        # catch-up (FR-12): слот давно прошёл — одна сводка за всё окно.
+        # iter-21: slot=now (было upcoming) — иначе при сбое доставки повтор
+        # D25 ждал реального наступления слота: prep с будущим slot не
+        # попадал ни в фазу 1 (prep is None), ни в фазу 2 (now < slot).
         if prep is None and is_due(now, times, last) and (upcoming is None or upcoming - now > lead):
-            made = await _prepare(conn, chat_id, upcoming, now)
+            made = await _prepare(conn, chat_id, now, now)
             if made is None:
                 continue
             if await _deliver(conn, chat_id, made, now):

@@ -6,6 +6,7 @@ iter-21a: короткие служебные вызовы LLM (интервью
 и SUGGEST_MAX_TOKENS=16000 целиком (та же ловушка, что map-стадия в iter-18):
 пустой/обрезанный ответ → None/[] → фолбэк на дефолт-профиль.
 tests/TESTPLAN.md."""
+import asyncio
 import sys
 import unittest
 from pathlib import Path
@@ -87,6 +88,55 @@ class DigestCharBudget(unittest.TestCase):
         # непотреблённым (ids только вошедших: иначе items «съедались» бы вслепую)
         self.assertEqual(ids, [0, 1])
         self.assertLessEqual(seen["len"], 1500 + 20)  # + обёртка <новости>
+
+
+class CatchUpRetry(unittest.TestCase):
+    """bot.scheduler.slots_once: catch-up не теряет сводку при сбое доставки.
+
+    До iter-21 prep в catch-up хранил БУДУЩИЙ слот (upcoming), поэтому повтор
+    D25 не срабатывал вовсе: фаза 1 требует prep is None, фаза 2 — now >= slot,
+    а catch-up — снова prep is None. Сводка висела в памяти до следующего слота.
+    """
+
+    def _tick(self, now, send_results):
+        from datetime import datetime
+
+        from bot import db, digest, scheduler, tgsend
+
+        row = {"chat_id": 1, "send_times": '["09:00"]',
+               "last_sent_at": "2026-09-20T06:00:00Z",
+               "onboarded_at": "2026-09-01T06:00:00Z"}
+        sent_text = []
+        real = (db.scheduled_users, db.record_digest, digest.build_delta,
+                tgsend.send_chat, scheduler.SEND_RETRY)
+        db.scheduled_users = lambda conn: [row]
+        db.record_digest = lambda *a, **k: 1
+        digest.build_delta = lambda conn, chat_id: ("Сводка", [7])
+        tgsend.send_chat = lambda text, chat_id: sent_text.append(text) or send_results.pop(0)
+        scheduler.SEND_RETRY = 0
+        try:
+            out = asyncio.run(scheduler.slots_once(None, now))
+        finally:
+            (db.scheduled_users, db.record_digest, digest.build_delta,
+             tgsend.send_chat, scheduler.SEND_RETRY) = real
+        return out, sent_text
+
+    def setUp(self):
+        from bot import scheduler
+
+        scheduler._state.clear()  # между тиками состояние НЕ чистится — в этом суть
+        scheduler._retry.clear()
+
+    def test_failed_delivery_is_retried(self):
+        from datetime import datetime
+
+        now = datetime(2026, 10, 2, 12, 0).astimezone()
+        sent, texts = self._tick(now, [False, True])
+        self.assertEqual(sent, [])          # первый тик: доставка не удалась
+        self.assertEqual(len(texts), 1)
+        sent, texts = self._tick(now, [True])  # повтор после SEND_RETRY
+        self.assertEqual(sent, [1])
+        self.assertEqual(len(texts), 1)     # та же подготовленная сводка ушла
 
 
 if __name__ == "__main__":
