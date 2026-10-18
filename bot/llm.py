@@ -163,7 +163,11 @@ def summarize(items_text: str, interests: str | None = None) -> str:
             # iter-18: обрезанный ответ — сбой, а не «короткая сводка»
             # (инцидент 2026-09-23: пользователю ушло 613 символов)
             last_exc = exc
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except Exception as exc:
+            # iter-21: сюда же падают сбои ВНУТРИ стрима — RuntimeError из
+            # pipeline.llm._call (event: error) и JSONDecodeError на битой
+            # SSE-строке. Раньше они пролетали мимо LLMError: prep молча
+            # возвращал None, и пользователь не получал даже «проблема с LLM».
             last_exc = exc
         log.error("LLM попытка %d/%d не удалась: %s", attempt, ATTEMPTS, last_exc)
         if attempt < ATTEMPTS:

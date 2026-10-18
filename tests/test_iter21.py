@@ -139,5 +139,35 @@ class CatchUpRetry(unittest.TestCase):
         self.assertEqual(len(texts), 1)     # та же подготовленная сводка ушла
 
 
+class StreamErrorBecomesLLMError(unittest.TestCase):
+    """bot.llm.summarize: сбой внутри стрима — тоже LLMError, не голый RuntimeError.
+
+    До iter-21 RuntimeError/JSONDecodeError из pipeline.llm._call пролетали мимо
+    LLMError: scheduler._prepare возвращал None (тик молча ничего не делает),
+    а /digest падал в лог aiogram — пользователь не получал «⚠️ проблема с LLM».
+    """
+
+    def test_stream_error_raises_llm_error(self):
+        from pipeline import config as pconfig
+        from bot import llm
+
+        attempts = []
+
+        def fake_call(system, messages, max_tokens, read_timeout=None,
+                      thinking=None, effort=None):
+            attempts.append(1)
+            raise RuntimeError("LLM stream error: {'type': 'overloaded'}")
+
+        real_call, real_key, real_sleep = llm._call, pconfig.LLM_API_KEY, llm._sleep
+        llm._call, pconfig.LLM_API_KEY, llm._sleep = fake_call, "test-key", lambda s: None
+        try:
+            with self.assertRaises(llm.LLMError) as caught:
+                llm.summarize("Заголовок — http://ex.test/1")
+        finally:
+            llm._call, pconfig.LLM_API_KEY, llm._sleep = real_call, real_key, real_sleep
+        self.assertEqual(len(attempts), 2)  # обе попытки ATTEMPTS
+        self.assertIn("stream error", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
