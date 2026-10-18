@@ -55,5 +55,39 @@ class InterviewWithoutThinking(unittest.TestCase):
         self.assertIs(seen["thinking"], False)
 
 
+class DigestCharBudget(unittest.TestCase):
+    """bot.digest.build_delta: вход мега-вызова ограничен и по символам."""
+
+    def test_input_stops_at_budget(self):
+        from bot import config, digest
+
+        rows = [{"id": i, "title": "Т" * 100, "url": f"http://ex.test/{i}",
+                 "gist": "Ж" * 400, "text": None} for i in range(10)]
+        seen = {}
+        real = (digest.db.pending_items, digest.db.get_interests,
+                digest.db.digest_period, digest.llm.summarize,
+                config.DIGEST_MAX_CHARS)
+        digest.db.pending_items = lambda conn, chat_id: rows
+        digest.db.get_interests = lambda conn, chat_id: None
+        digest.db.digest_period = lambda conn, chat_id: None
+
+        def fake_summarize(text, interests=None):
+            seen["len"] = len(text)
+            return "Лид."
+
+        digest.llm.summarize = fake_summarize
+        config.DIGEST_MAX_CHARS = 1500
+        try:
+            text, ids = digest.build_delta(None, 1)
+        finally:
+            (digest.db.pending_items, digest.db.get_interests,
+             digest.db.digest_period, digest.llm.summarize,
+             config.DIGEST_MAX_CHARS) = real
+        # 2 пункта по ~530 симв. влезают в 1500, третий — нет и остаётся
+        # непотреблённым (ids только вошедших: иначе items «съедались» бы вслепую)
+        self.assertEqual(ids, [0, 1])
+        self.assertLessEqual(seen["len"], 1500 + 20)  # + обёртка <новости>
+
+
 if __name__ == "__main__":
     unittest.main()

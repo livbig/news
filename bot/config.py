@@ -39,6 +39,9 @@ TEST_PG_URL = os.environ.get("BOT_TEST_PG_URL", "")
 # iter-11b (D42/D43): объём входа дайджеста — per-source бюджет + общий кап
 DIGEST_PER_SOURCE = int(os.environ.get("BOT_DIGEST_PER_SOURCE", "15"))
 DIGEST_MAX_ITEMS = int(os.environ.get("BOT_DIGEST_MAX_ITEMS", "800"))
+# iter-21: кап входа по СИМВОЛАМ: кап по числу пунктов (800) пропускал вход
+# ~1 МБ ≈ 350-450k входных токенов (и второй раз — на повторе после сбоя)
+DIGEST_MAX_CHARS = int(os.environ.get("BOT_DIGEST_MAX_CHARS", "600000"))
 
 # iter-14 (уровень 1): полные тексты пунктов — кап хранения и кап выдержки в промпте
 ITEM_TEXT_CAP = int(os.environ.get("BOT_ITEM_TEXT_CAP", "4000"))

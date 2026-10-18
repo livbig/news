@@ -39,6 +39,8 @@ def build_delta(conn, chat_id):
     if not rows:
         return None, []
     lines = []
+    kept = []
+    used = 0
     for row in rows:
         line = (f"{html.escape(row['title'])} — "
                 f"{html.escape(row['url'], quote=False)}")
@@ -51,13 +53,19 @@ def build_delta(conn, chat_id):
                 cap = config.DIGEST_TEXT_CAP
                 excerpt = text[:cap] + ("…" if len(text) > cap else "")
                 line += f"\nТЕКСТ: {html.escape(excerpt, quote=False)}"
+        # iter-21: кап входа по символам (см. config.DIGEST_MAX_CHARS); не
+        # вошедшие пункты остаются непотреблёнными и уйдут в следующую сводку.
+        if lines and used + len(line) > config.DIGEST_MAX_CHARS:
+            break
+        used += len(line)
         lines.append(line)
+        kept.append(row["id"])
     items_text = "<новости>\n" + "\n\n".join(lines) + "\n</новости>"
     text = llm.summarize(items_text, db.get_interests(conn, chat_id))
     period = db.digest_period(conn, chat_id)
     if period is not None:  # чат знаком — иначе record_digest всё равно откажет
         text = f"{_period_header(*period)}\n\n{text}"  # iter-17
-    return text, [row["id"] for row in rows]
+    return text, kept
 
 
 def degraded_footer(errors) -> str:
