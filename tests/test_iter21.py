@@ -108,6 +108,19 @@ class PendingItems(unittest.TestCase):
             db.consumed_keys = real
         self.assertEqual(calls, [])
 
+    def test_text_is_cut_to_excerpt_in_query(self):
+        """В память/по сети едет выдержка, а не весь text (до 4 КБ на пункт)."""
+        from bot import config, db
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, 1)
+        sid = db.add_source(conn, 1, "rss", "http://x.test/f.xml", "Feed")
+        db.insert_item(conn, sid, "http://ex.test/1", "Заголовок",
+                       "2026-10-01T00:00:00Z", "Ж" * 5000)
+        rows = db.pending_items(conn, 1)
+        # cap+1 — признак усечения для build_delta (он ставит «…» и режет до cap)
+        self.assertEqual(len(rows[0]["text"]), config.DIGEST_TEXT_CAP + 1)
+
 
 class CatchUpRetry(unittest.TestCase):
     """bot.scheduler.slots_once: catch-up не теряет сводку при сбое доставки.

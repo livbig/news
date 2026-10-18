@@ -579,8 +579,11 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
     per_source = per_source if per_source is not None else config.DIGEST_PER_SOURCE
     limit = limit if limit is not None else config.DIGEST_MAX_ITEMS
     rows = conn.execute(
-        "SELECT id, title, url, text, gist FROM ("
-        "  SELECT i.id, i.title, i.url, i.text, i.gist, i.published,"
+        # iter-21: из БД читается только выдержка (DIGEST_TEXT_CAP), а не весь
+        # text (до 4 КБ на пункт): 800 x 4 КБ = 3,2 МБ из Supabase на сводку.
+        # +1 символ — чтобы build_delta видел факт усечения и ставил «…».
+        "SELECT id, title, url, substr(text, 1, %s) AS text, gist FROM ("
+        "  SELECT i.id, i.title, i.url, i.text AS text, i.gist, i.published,"
         "         ROW_NUMBER() OVER (PARTITION BY i.source_id"
         "                            ORDER BY i.published DESC, i.id DESC) AS rn"
         "  FROM items i JOIN sources s ON s.id = i.source_id"
@@ -588,7 +591,7 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
         "    SELECT 1 FROM digest_items di JOIN digests d ON d.id=di.digest_id"
         "    WHERE di.item_id=i.id AND d.chat_id=%s)"
         ") t WHERE rn <= %s ORDER BY published DESC, id DESC LIMIT %s",
-        (chat_id, chat_id, per_source, limit),
+        (config.DIGEST_TEXT_CAP + 1, chat_id, chat_id, per_source, limit),
     ).fetchall()
     if not rows:  # iter-21: пустая дельта — не читаем всю историю сводок зря
         return []
