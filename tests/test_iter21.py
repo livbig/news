@@ -90,6 +90,25 @@ class DigestCharBudget(unittest.TestCase):
         self.assertLessEqual(seen["len"], 1500 + 20)  # + обёртка <новости>
 
 
+class PendingItems(unittest.TestCase):
+    """bot.db.pending_items: дешёвый выход на пустой дельте."""
+
+    def test_empty_delta_skips_history_read(self):
+        """Нет кандидатов — consumed_keys (вся история сводок чата) не читается."""
+        from bot import db
+
+        conn = db.connect(":memory:")
+        db.ensure_user(conn, 1)
+        calls = []
+        real = db.consumed_keys
+        db.consumed_keys = lambda c, chat_id: calls.append(chat_id) or (set(), set())
+        try:
+            self.assertEqual(db.pending_items(conn, 1), [])
+        finally:
+            db.consumed_keys = real
+        self.assertEqual(calls, [])
+
+
 class CatchUpRetry(unittest.TestCase):
     """bot.scheduler.slots_once: catch-up не теряет сводку при сбое доставки.
 

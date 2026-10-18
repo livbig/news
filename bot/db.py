@@ -590,6 +590,8 @@ def pending_items(conn, chat_id, per_source=None, limit=None) -> list:
         ") t WHERE rn <= %s ORDER BY published DESC, id DESC LIMIT %s",
         (chat_id, chat_id, per_source, limit),
     ).fetchall()
+    if not rows:  # iter-21: пустая дельта — не читаем всю историю сводок зря
+        return []
     seen_urls, seen_titles = consumed_keys(conn, chat_id)
     out = []
     for row in rows:
