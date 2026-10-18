@@ -53,7 +53,9 @@ export function reduceSse(events) {
 
 async function readStream(response, onProgress) {
   const started = Date.now();
-  // Платформенный fetch отдаёт либо поток (res.body), либо только текст — поддерживаем оба.
+  // Замер 2026-10-19: в изоляте res.body.getReader отсутствует (TypeError), поэтому
+  // основной путь — текст целиком. Ветка со стримом оставлена на случай, если
+  // платформа включит потоковое чтение: тогда прогресс «думаю…» станет живым.
   const stream = response.body;
   if (stream && typeof stream.getReader === 'function') {
     const reader = stream.getReader();
@@ -189,6 +191,9 @@ export async function ask({ question, context, history = [] }) {
   return normalizeLlmText(text);
 }
 
+/** Пауза между попытками. Замер 2026-10-19: setTimeout в изоляте отсутствует,
+ * поэтому пауза вырождается в ноль — повторы идут сразу (это лучше, чем висеть:
+ * бюджет вызова ~30 с, тратить его на сон нельзя). */
 function sleep(ms) {
   return new Promise((resolve) => {
     if (typeof setTimeout === 'function') setTimeout(resolve, ms);

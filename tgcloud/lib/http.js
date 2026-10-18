@@ -28,6 +28,8 @@ export async function getText(url, { retries = 3, headers = {} } = {}) {
       if (response.ok) return await response.text();
       const code = statusCode(response.status);
       // 4xx (кроме 429) повторять бессмысленно: неверный URL или блокировка.
+      // Замер 2026-10-19: один запрос живёт до ~27 с, весь вызов — ~30 с; поэтому
+      // сбор идёт партиями (курсор в jobs), а не «все источники за раз».
       if (!RETRY_STATUS.has(response.status)) {
         throw new HttpError(`HTTP ${response.status} ${url}`, { status: response.status, code });
       }
@@ -49,6 +51,7 @@ function statusCode(status) {
   return `HTTP_${status}`;
 }
 
+/** Замер 2026-10-19: setTimeout в изоляте нет — backoff вырождается в ноль. */
 function sleep(ms) {
   return new Promise((resolve) => {
     if (typeof setTimeout === 'function') setTimeout(resolve, ms);
