@@ -47,6 +47,7 @@ def next_question(history: list[dict]) -> str | None:
         out = _call(
             INTERVIEWER_PROMPT, history or [{"role": "user", "content": KICKOFF}],
             INTERVIEW_MAX_TOKENS, read_timeout=INTERVIEW_TIMEOUT,
+            thinking=False,  # iter-21: thinking съедал 1000 токенов → пустой вопрос
         )
     except Exception as exc:
         log.error("интервью: раунд не удался: %s", exc)
@@ -65,6 +66,7 @@ def build_profile(history: list[dict]) -> str | None:
         out = _call(
             PROFILE_PROMPT, history,
             INTERVIEW_MAX_TOKENS, read_timeout=INTERVIEW_TIMEOUT,
+            thinking=False,  # iter-21: как в next_question — бюджет 1000 на thinking
         )
     except Exception as exc:
         log.error("интервью: сборка профиля не удалась: %s", exc)

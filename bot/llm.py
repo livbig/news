@@ -226,6 +226,8 @@ def suggest_sources(profile: str) -> list[dict]:
             [{"role": "user", "content": prompt}],
             SUGGEST_MAX_TOKENS,
             read_timeout=SUGGEST_TIMEOUT,
+            thinking=False,  # iter-21: JSON-подбор — короткая генерация; effort=max
+                             # в thinking съедал 16000 → обрезанный JSON → []
         )
     except Exception as exc:
         log.error("suggest_sources: LLM не ответила: %s", exc)
