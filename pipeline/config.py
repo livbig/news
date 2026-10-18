@@ -48,3 +48,7 @@ def setup_logging():
             logging.StreamHandler(),
         ],
     )
+    # iter-21: httpx пишет запрос на INFO с ПОЛНЫМ URL, а у Telegram в URL
+    # лежит токен бота (api.telegram.org/bot<TOKEN>/sendMessage) — он утекал
+    # в run.log и journald (3745 строк локального лога). Предупреждения — видно.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
