@@ -224,7 +224,7 @@ export async function lastDigest(chatId) {
 
 // --- retention (ленивый проход вместо cron, D47) ---------------------------------
 
-export async function retentionPass(chatId, { itemsDays = 10, days = 30 } = {}) {
+export async function retentionPass(chatId, { itemsDays = 10, days = 30 } = {}, maxRows = 300) {
   let removed = 0;
   const now = Date.now();
   const itemsFloor = isoFromMs(now - itemsDays * DAY_MS);
@@ -236,7 +236,7 @@ export async function retentionPass(chatId, { itemsDays = 10, days = 30 } = {}) 
       .select({ id: items.id, sourceId: items.sourceId, urlHash: items.urlHash })
       .from(items)
       .where(and(inArray(items.sourceId, ids), lt(items.fetchedAt, itemsFloor)))
-      .limit(2000)
+      .limit(maxRows)
       .all();
     for (const row of old) {
       await db.insert(seenHashes).values({ sourceId: row.sourceId, urlHash: row.urlHash, createdAt: isoNow() }).run();

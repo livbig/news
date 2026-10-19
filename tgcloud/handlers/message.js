@@ -1,7 +1,7 @@
 // Единая точка входа бота: гейт → интент → действие.
-// Сводка выполняется воркером (GitHub Actions): мега-вызов effort=max идёт 264 с,
-// а инвокация платформы живёт 30 с (замер 2026-10-19, docs/tgcloud-migration.md §9).
-// Здесь — мгновенные шаги: задача в БД, запуск воркера, ответ пользователю.
+// Сводка считается здесь же, в одном вызове платформы (~30 с): сбор с дедлайном,
+// отбор, LLM без мышления (17 с), отправка чанками. Внешних исполнителей нет.
+// Бюджет и замеры — docs/tgcloud-migration.md §11.
 
 import { botApi } from '../lib/telegram.js';
 import { gate, loadConfig } from '../lib/config.js';
@@ -79,13 +79,16 @@ async function runDigest(chatId) {
   const left = () => budget.hardDeadlineMs - (Date.now() - started);
 
   const running = await store.latestJob(chatId);
-  if (running?.status === 'running' && Date.now() - Date.parse(running.updatedAt ?? '') < 10 * 60 * 1000) {
+  if (running?.status === 'running' && Date.now() - Date.parse(running.updatedAt ?? '') < 2 * 60 * 1000) {
     await send(chatId, `⏳ Сводка уже собирается (задача ${running.id}). Дождись результата.`);
     return;
   }
   const jobId = await store.createJob(chatId);
   await store.setJob(jobId, { status: 'running', stage: 'collect' });
 
+  let sentChunks = 0;
+  let totalChunks = 0;
+  let jobDone = false;
   const status = await statusHandle(chatId, '🔎 Собираю ленту…');
   await typing(chatId);
   try {
@@ -93,12 +96,30 @@ async function runDigest(chatId) {
     await store.retentionPass(chatId, config.retention).catch((error) => console.warn('retention:', error?.message ?? error));
 
     const allSources = await store.listActiveSources(chatId);
-    const sources = allSources.filter((row) => row.kind !== 'html');
+    const supported = allSources.filter((row) => row.kind !== 'html');
     const unsupported = allSources.filter((row) => row.kind === 'html').map((row) => row.url);
-    const collected = await collectAll(sources, { deadlineMs: Math.max(4000, Math.min(budget.collectDeadlineMs, left() - 14000)) });
+    // Ротация: за один вызов трогаем не больше maxSourcesPerRun, курсор — в БД.
+    // Так 60+ источников собираются за несколько запросов, а не ломают таймаут.
+    const cursorRow = await store.getFsm('collect:cursor');
+    let cursor = 0;
+    try {
+      cursor = Number(JSON.parse(cursorRow?.data ?? '{}').value) || 0;
+    } catch {
+      cursor = 0;
+    }
+    const perRun = Math.max(1, budget.maxSourcesPerRun ?? 16);
+    const rotated = supported.length > perRun
+      ? [...supported.slice(cursor % supported.length), ...supported.slice(0, cursor % supported.length)].slice(0, perRun)
+      : supported;
+    const nextCursor = supported.length ? (cursor + rotated.length) % supported.length : 0;
+    await store.setFsm('collect:cursor', 'cursor', { value: nextCursor }).catch(() => {});
+    const collected = await collectAll(rotated, { deadlineMs: Math.max(4000, Math.min(budget.collectDeadlineMs, left() - 14000)) });
 
     const window = digestWindow({ nowMs: Date.now(), lastSentAt: await store.getLastSentAt(chatId), windowDays: config.digest.windowDays, firstWindowHours: config.digest.firstWindowHours });
-    const rows = await store.pendingRows(chatId, window.fromMs);
+    // Кандидаты — ВСЁ за последние 7 дней, а не только после прошлой сводки:
+    // непоместившиеся в лимит 45 пунктов должны попасть в следующую (P0 ревью 2026-10-19).
+    const eligibilityMs = Date.now() - config.digest.windowDays * 24 * 60 * 60 * 1000;
+    const rows = await store.pendingRows(chatId, eligibilityMs);
     const consumed = await store.consumedKeys(chatId);
     const { selected } = selectPending(rows, {
       perSource: budget.perSource,
@@ -117,6 +138,7 @@ async function runDigest(chatId) {
       if (unsupported.length) notes.push(`ℹ️ Не собираются: ${unsupported.join(', ')}`);
       await send(chatId, [EMPTY_TEXT, ...notes].join('\n\n'));
       await store.setJob(jobId, { status: 'done', stage: 'empty', detail: 'новостей нет' });
+      jobDone = true;
       return;
     }
 
@@ -124,12 +146,14 @@ async function runDigest(chatId) {
       await status.close();
       await send(chatId, `⏳ Собрал ${plural(selected.length, 'пункт', 'пункта', 'пунктов')}, но на анализ уже не хватает времени вызова. Напиши «сводка» ещё раз — новости сохранены и никуда не денутся.`);
       await store.setJob(jobId, { status: 'failed', stage: 'deadline', detail: 'не хватило бюджета на LLM' });
+      jobDone = true;
       return;
     }
     await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')}…`);
     const summary = await summarize(formatItemsInput(selected, config.digest.textCap), await store.getInterests(chatId), null, {
       thinking: budget.thinking,
       maxTokens: budget.maxTokens,
+      attempts: budget.attempts ?? 1,
     });
     const text = composeDigest({
       header: periodHeader(periodFrom, periodTo, config.tz.offsetMin),
@@ -142,22 +166,31 @@ async function runDigest(chatId) {
 
     await status.set('✍️ Пишу сообщения…');
     const chunks = chunkMessage(text, config.digest.messageLimit);
+    totalChunks = chunks.length;
     let sent = 0;
     for (const chunk of chunks) {
       const ok = await sendChunk(chatId, chunk, false) || await sendChunk(chatId, chunk, true);
       if (!ok) throw new Error(`не удалось отправить часть ${sent + 1} из ${chunks.length}`);
       sent += 1;
+      sentChunks = sent;
       if (sent === 1) await status.close();
     }
     await store.recordDigest(chatId, { periodFrom, periodTo, text, itemIds: selected.map((row) => row.id) });
     await store.appendHistory(chatId, 'assistant', text);
     await store.setJob(jobId, { status: 'done', stage: 'sent', detail: `${plural(selected.length, 'пункт', 'пункта', 'пунктов')}, ${plural(sent, 'сообщение', 'сообщения', 'сообщений')}` });
+    jobDone = true;
     console.log(`сводка: ${selected.length} пунктов, ${collected.added} новых, ${Math.round((Date.now() - started) / 1000)} c`);
   } catch (error) {
     await status.close();
     const reason = error instanceof LlmError ? error.message : String(error?.message ?? error);
-    await store.setJob(jobId, { status: 'failed', stage: 'error', detail: reason.slice(0, 200) });
-    await send(chatId, `⚠️ Сводка не удалась: ${escapeHtml(reason).slice(0, 400)}\n\nНовости не потеряны — они уйдут в следующую сводку.`);
+    await store.setJob(jobId, { status: 'failed', stage: 'error', detail: reason.slice(0, 200) }).catch(() => {});
+    const delivered = sentChunks > 0;
+    await send(chatId, delivered
+      ? `⚠️ Сводка доставлена не полностью (${sentChunks} из ${totalChunks}): ${escapeHtml(reason).slice(0, 300)}. Остальное придёт в следующей.`
+      : `⚠️ Сводка не удалась: ${escapeHtml(reason).slice(0, 400)}\n\nНовости не потеряны — они уйдут в следующую сводку.`);
+  } finally {
+    // Страховка от вечного «уже собирается»: но не перетираем уже завершённую задачу.
+    if (!jobDone) await store.setJob(jobId, { status: 'failed', stage: 'aborted', detail: 'вызов прерван' }).catch(() => {});
   }
 }
 
@@ -202,7 +235,10 @@ async function answerQuestion(chatId, question) {
     return;
   }
   await status.close();
-  for (const chunk of chunkMessage(answer, config.digest.messageLimit)) await send(chatId, chunk);
+  for (const chunk of chunkMessage(answer, config.digest.messageLimit)) {
+    const ok = await sendChunk(chatId, chunk, false) || await sendChunk(chatId, chunk, true);
+    if (!ok) console.error('answer: не удалось доставить ответ');
+  }
   await store.appendHistory(chatId, 'user', question);
   await store.appendHistory(chatId, 'assistant', answer);
 }

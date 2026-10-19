@@ -18,19 +18,25 @@ export async function collectAll(sources, { deadlineMs = 0 } = {}) {
   const errors = [];
   const partial = [];
   let added = 0;
-  const queue = [...sources];
-  // Каналы — строго последовательно (как bot/collect.py): параллельные запросы к
-  // t.me/зеркалу ловят 429 и валят все каналы сразу.
-  const onlyChannels = queue.length > 0 && queue.every((row) => row.kind === 'tgweb');
-  const workers = onlyChannels ? 1 : Math.max(1, Math.min(config.collect.workers, queue.length));
+  // Каналы — первыми и строго последовательно (как bot/collect.py): параллельные
+  // запросы к t.me/зеркалу ловят 429 и валят все каналы разом.
+  const channels = sources.filter((row) => row.kind === 'tgweb');
+  const feeds = sources.filter((row) => row.kind !== 'tgweb');
 
-  await Promise.all(
-    Array.from({ length: workers }, async () => {
+  // Сначала быстрые фиды (успевают всегда), потом каналы с остатком бюджета:
+  // если канал не влез по времени, новости из фидов всё равно в сводке.
+  await runPool(feeds, Math.max(1, Math.min(config.collect.workers, feeds.length || 1)));
+  await runPool(channels, 1);
+
+  async function runPool(list, workers) {
+    const queue = [...list];
+    await Promise.all(
+      Array.from({ length: Math.max(1, workers) }, async () => {
       for (;;) {
         const source = queue.shift();
         if (!source) return;
         if (deadline && Date.now() > deadline) {
-          partial.push({ url: source.url, reason: 'не собрано: не хватило времени вызова' });
+          partial.push({ url: source.url, reason: 'нехватка времени' });
           continue;
         }
         try {
@@ -46,8 +52,9 @@ export async function collectAll(sources, { deadlineMs = 0 } = {}) {
           console.warn(`FAIL ${source.url} [${code}]`);
         }
       }
-    }),
-  );
+      }),
+    );
+  }
   return { added, errors, partial };
 }
 

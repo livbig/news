@@ -62,7 +62,8 @@ test('composeDigest: честные пометки о несобранном и 
     unsupported: ['https://news.ycombinator.com'],
   });
   assert.match(text, /Окно ограничено 7 днями|окно ограничено 7 днями/);
-  assert.match(text, /часть источников не отдаёт историю/);
+  assert.match(text, /собрана неполно/);
+  assert.match(text, /история недоступна/);
   assert.match(text, /не собираются: https:\/\/news\.ycombinator\.com/);
   assert.match(text, /Не удалось собрать 1 источник/);
   assert.ok(!composeDigest({ header: 'h', summary: 's' }).includes('ℹ️'), 'без проблем — без пометок');

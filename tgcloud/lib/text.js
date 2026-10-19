@@ -63,16 +63,18 @@ export async function urlHash(url, title) {
 
 /**
  * Режем текст на сообщения ≤ limit (критерий 5: 4000 символов), не разрывая
- * HTML-тег и entity. Сначала по абзацам, длинный абзац — по строкам, затем по словам.
+ * HTML-тег и entity и балансируя разрешённые теги (<a>, <b>, <i>): открытый тег
+ * закрывается в конце куска и переоткрывается в начале следующего.
+ * Ревью 2026-10-19: без балансировки Telegram отклонял кусок целиком.
  */
 export function chunkMessage(text, limit = 4000) {
   const source = String(text ?? '').trim();
   if (!source) return [];
   if (source.length <= limit) return [source];
-  const chunks = [];
+  const blocks = [];
   let current = '';
   const flush = () => {
-    if (current.trim()) chunks.push(current.trim());
+    if (current.trim()) blocks.push(current.trim());
     current = '';
   };
   for (const paragraph of source.split(/\n{2,}/)) {
@@ -86,17 +88,61 @@ export function chunkMessage(text, limit = 4000) {
       current = paragraph;
       continue;
     }
-    for (const piece of splitLongBlock(paragraph, limit)) chunks.push(piece);
+    for (const piece of splitLongBlock(paragraph, limit)) blocks.push(piece);
   }
   flush();
-  return chunks;
+  return blocks.map((block) => sanitizeChunk(block, limit)).filter((chunk) => chunk.trim());
 }
+
+/** Гарантирует валидный HTML в каждом куске: выкидывает закрывашки без открывашки,
+ * закрывает незакрытые теги, а если закрывашки не влезают в лимит — снимает разметку.
+ * Ревью 2026-10-19: без этого Telegram отклонял кусок целиком. */
+export function sanitizeChunk(chunk, limit = 4000) {
+  const stack = [];
+  let out = '';
+  let last = 0;
+  for (const match of String(chunk).matchAll(/<(\/?)(a|b|i)\b[^>]*>/gi)) {
+    out += chunk.slice(last, match.index);
+    last = match.index + match[0].length;
+    const tag = match[2].toLowerCase();
+    if (match[1] === '/') {
+      const index = stack.lastIndexOf(tag);
+      if (index >= 0) {
+        stack.splice(index, 1);
+        out += match[0];
+      }
+      // закрывашка без открывашки — выбрасываем
+    } else if (/\/>$/.test(match[0])) {
+      out += match[0];
+    } else {
+      stack.push(tag);
+      out += match[0];
+    }
+  }
+  out += chunk.slice(last);
+  const closers = stack.slice().reverse().map((tag) => `</${tag}>`).join('');
+  if (out.length + closers.length <= limit) return out + closers;
+  return out.replace(/<\/?(a|b|i)\b[^>]*>/gi, '');
+}
+
+/** Совместимость: прежнее имя из тестов. */
+export function balanceTags(blocks, limit = 4000) {
+  return blocks.map((block) => sanitizeChunk(block, limit)).filter((chunk) => chunk.trim());
+}
+
+/** Снять разметку, не съедая текст между «<» и «>» (например «доходность < 5%»). */
+export function stripMarkup(text) {
+  return String(text ?? '')
+    .replace(/<\/?(a|b|i)\b[^>]*>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n');
+}
+
 
 function splitLongBlock(block, limit) {
   const out = [];
   let rest = block;
   while (rest.length > limit) {
-    let cut = safeCut(rest, limit);
+    const cut = safeCut(rest, limit);
     out.push(rest.slice(0, cut).trim());
     rest = rest.slice(cut).trim();
   }
@@ -115,13 +161,7 @@ function insideEntity(text, pos) {
   return amp >= 0 && pos - amp <= 10 && !text.slice(amp, pos).includes(';');
 }
 
-/**
- * Граница разреза: не внутри тега и не внутри entity — иначе Telegram отклонит HTML.
- * Приоритет — пробел, чтобы куски не рвались посреди слова.
- *
- * shortcut: тег, открытый в одном сообщении и закрытый в следующем, не балансируется;
- * при появлении в выводе LLM многоабзацных <a> — добавить перенос незакрытых тегов.
- */
+/** Граница разреза: не внутри тега и не внутри entity, приоритет — пробел. */
 function safeCut(text, limit) {
   const floor = Math.floor(limit * 0.5);
   for (let pos = limit; pos > floor; pos -= 1) {
@@ -129,15 +169,9 @@ function safeCut(text, limit) {
     if (insideTag(text, pos) || insideEntity(text, pos)) continue;
     return pos;
   }
-  if (insideTag(text, limit)) {
-    const open = text.lastIndexOf('<', limit - 1);
-    return Math.max(1, open);
-  }
-  if (insideEntity(text, limit)) {
-    const amp = text.lastIndexOf('&', limit - 1);
-    return Math.max(1, amp);
-  }
-  return limit;
+  if (insideTag(text, limit)) return Math.max(1, text.lastIndexOf('<', limit - 1));
+  if (insideEntity(text, limit)) return Math.max(1, text.lastIndexOf('&', limit - 1));
+  return Math.max(1, limit);
 }
 
 export function isoNow() {

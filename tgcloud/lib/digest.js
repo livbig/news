@@ -103,7 +103,7 @@ export const EMPTY_TEXT = 'Новых новостей с прошлой сво�
 /** Футер о несобранных источниках: предупреждение в самой сводке, подробности — /sources. */
 export function degradedFooter(errors) {
   if (!errors?.length) return '';
-  const listing = errors.map((e) => e.url).join(', ');
+  const listing = errors.map((e) => escapeHtml(e.url)).join(', ');
   return `\n\n⚠ Не удалось собрать ${errors.length} источник(ов): ${listing}\nПодробности — /sources.`;
 }
 
@@ -112,8 +112,11 @@ export function degradedFooter(errors) {
 export function composeDigest({ header, summary, capped = false, errors = [], partial = [], unsupported = [] }) {
   const notes = [];
   if (capped) notes.push('окно ограничено 7 днями — более старое не запрашивается');
-  if (partial.length) notes.push(`часть источников не отдаёт историю за период (${partial.length}) — по ним сводка неполная`);
-  if (unsupported.length) notes.push(`не собираются: ${unsupported.join(', ')} (тип источника пока не перенесён)`);
+  if (partial.length) {
+    const reasons = [...new Set(partial.map((p) => (typeof p === 'string' ? 'история недоступна' : p.reason)))];
+    notes.push(`часть источников собрана неполно (${partial.length}): ${reasons.join('; ')}`);
+  }
+  if (unsupported.length) notes.push(`не собираются: ${unsupported.map((url) => escapeHtml(url)).join(', ')} (тип источника пока не перенесён)`);
   const noteBlock = notes.length ? `\n\nℹ️ ${notes.join('; ')}.` : '';
   return `${header}\n\n${summary}${noteBlock}${degradedFooter(errors)}`;
 }

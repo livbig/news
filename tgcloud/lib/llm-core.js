@@ -154,14 +154,15 @@ function lowerEffort(effort) {
   return EFFORT_LADDER[Math.min(index + 1, EFFORT_LADDER.length - 1)] ?? 'low';
 }
 
-async function summarizeWith({ http, config, itemsText, interests, onProgress, effort: forcedEffort = null, maxTokens = null, thinking = null }) {
+async function summarizeWith({ http, config, itemsText, interests, onProgress, effort: forcedEffort = null, maxTokens = null, thinking = null, attempts = null }) {
   if (!config.llm.apiKey) {
     console.warn('LLM_API_KEY не задан — mock-сводка (dev)');
     return `${MOCK_NOTE}\n\n${itemsText.slice(0, 1500)}`;
   }
   const messages = [{ role: 'user', content: itemsText }];
   let lastError = null;
-  for (let attempt = 1; attempt <= config.llm.attempts; attempt += 1) {
+  const maxAttempts = Math.max(1, attempts ?? config.llm.attempts);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // Обрезка по max_tokens: повтор с тем же усилием бесполезен (iter-20) — снижаем на шаг.
     const effort = lastError instanceof LlmTruncatedError ? lowerEffort(forcedEffort ?? config.llm.effort) : forcedEffort;
     try {
@@ -182,10 +183,10 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress, e
       if (error instanceof LlmError && /LLM API ошибка 4\d\d/.test(error.message)) throw error;
       lastError = error;
     }
-    console.error(`LLM попытка ${attempt}/${config.llm.attempts} не удалась: ${lastError?.message}`);
-    if (attempt < config.llm.attempts) await sleep(config.llm.retryPauseMs);
+    console.error(`LLM попытка ${attempt}/${maxAttempts} не удалась: ${lastError?.message}`);
+    if (attempt < maxAttempts) await sleep(config.llm.retryPauseMs);
   }
-  throw new LlmError(`LLM недоступна после ${config.llm.attempts} попыток: ${lastError?.message ?? '?'}`);
+  throw new LlmError(`LLM недоступна после ${maxAttempts} попыток: ${lastError?.message ?? '?'}`);
 }
 
 /** Диалог и уточнения по темам (R3): без мышления — малый бюджет, как в проде. */
