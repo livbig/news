@@ -10,6 +10,7 @@ import {
   interestSourceTitle,
   interestSourcesFor,
   matchInterestTerms,
+  containsWholeWords,
   normalizeTerm,
   parseInterestCallback,
   parseInterests,
@@ -122,6 +123,39 @@ test('P1-7: источники ищутся по термину, а не по в
   assert.equal(interestSourcesFor('кобальт', sources).length, 0);
   // Строка профиля в целом = несколько терминов: источники удаляются по каждому.
   assert.equal(interestSourcesFor('Драгметаллы: золото, платина, палладий — глубоко', sources).length, 2);
+});
+
+test('P2-5: частичное совпадение подписи не сносит содержимое блока', () => {
+  const result = removeInterestTerm('AI и робототехника: новые модели, промпт-инжиниринг', 'робототехнику');
+  assert.equal(result.removed, 'робототехника');
+  assert.ok(!/робототехник/i.test(result.text), result.text);
+  for (const kept of ['новые модели', 'промпт-инжиниринг']) assert.ok(result.text.includes(kept), `остался ${kept}`);
+});
+
+test('P2-6: после удаления не остаётся мусорного «интереса» из подписи', () => {
+  const result = removeInterestTerm('Крипта — очень кратко', 'крипта');
+  assert.equal(result.text, '', 'степень проработки — не интерес');
+  assert.equal(result.removed, 'Крипта');
+  // у соседей подпись-степень остаётся: она относится к оставшимся терминам
+  const shared = removeInterestTerm('Драгметаллы: золото, платина — глубоко', 'золото');
+  assert.match(shared.text, /платина/);
+  assert.match(shared.text, /глубоко/);
+});
+
+test('P2-7: термин в нескольких местах профиля убирается сразу', () => {
+  const result = removeInterestTerm('золото\nзолото физическое', 'золото', true);
+  assert.ok(!/золот/i.test(result.text), result.text);
+  assert.equal(result.removed, 'золото');
+  // выбор кнопкой указывает на конкретную строку — остальные вхождения не трогаем
+  const picked = removeInterestTerm('золото\nзолото физическое', 'золото');
+  assert.ok(/золот/i.test(picked.text));
+});
+
+test('P2-7: цель названа целым словом — уточнять кнопками нечего', () => {
+  assert.equal(containsWholeWords('золото физическое', 'золото'), true);
+  assert.equal(containsWholeWords('золото физическое', 'физическое золото'), true);
+  assert.equal(containsWholeWords('ставка фрс', 'ставк'), false, 'обрывок — неоднозначность');
+  assert.equal(containsWholeWords('робототехника — глубоко', 'робототехнику'), false, 'падеж — кнопки как раньше');
 });
 
 test('P2: отдельный ключ fsm для интересов — не затирает ожидание ссылки', () => {

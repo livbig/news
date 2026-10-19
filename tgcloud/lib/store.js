@@ -149,10 +149,11 @@ export async function addInterestSources(chatId, terms, max = 100) {
 }
 
 /** Удаление интереса целиком: строка профиля + его источники с items и seen_hashes (FR-6).
- * В снимке для «Вернуть» — профиль ДО удаления: иначе откат вернёт источники без термина. */
-export async function removeInterest(chatId, term) {
+ * В снимке для «Вернуть» — профиль ДО удаления: иначе откат вернёт источники без термина.
+ * all — убрать все вхождения термина в профиле (текст «убери золото», P2-7). */
+export async function removeInterest(chatId, term, all = false) {
   const current = String((await getInterests(chatId)) ?? '');
-  const removed = removeInterestTerm(current, term);
+  const removed = removeInterestTerm(current, term, all);
   if (!removed.removed) return null;
   const rows = await interestSources(chatId, removed.removed);
   let removedSources = 0;
@@ -242,15 +243,20 @@ export async function pendingRows(chatId, windowStartMs, limit = 3000) {
     .all();
 }
 
-/** Лента за период без учёта «уже отправлено»: контекст для вопросов по темам (R3). */
-export async function recentItems(chatId, sinceMs, limit = 40) {
+/** Лента за период без учёта «уже отправлено»: контекст для вопросов по темам (R3).
+ * upperMs — верхняя граница закрытого окна (P2-11): «что было по золоту с 1 октября»
+ * не должно подмешивать сегодняшние пункты. Граница — по дате публикации, как в rowsInPeriod. */
+export async function recentItems(chatId, sinceMs, limit = 40, upperMs = null) {
   const owned = await db.select({ id: sources.id }).from(sources).where(eq(sources.chatId, chatId)).all();
   const ids = owned.map((row) => row.id);
   if (!ids.length) return [];
+  const clause = upperMs
+    ? and(inArray(items.sourceId, ids), gte(items.fetchedAt, isoFromMs(sinceMs)), lt(items.published, isoFromMs(upperMs)))
+    : and(inArray(items.sourceId, ids), gte(items.fetchedAt, isoFromMs(sinceMs)));
   return db
     .select({ title: items.title, url: items.url, text: items.text, gist: items.gist, published: items.published })
     .from(items)
-    .where(and(inArray(items.sourceId, ids), gte(items.fetchedAt, isoFromMs(sinceMs))))
+    .where(clause)
     .orderBy(desc(items.published), desc(items.id))
     .limit(limit)
     .all();

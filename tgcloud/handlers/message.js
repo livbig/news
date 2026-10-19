@@ -8,7 +8,7 @@ import { gate, loadConfig } from '../lib/config.js';
 import { route } from '../lib/intents.js';
 import { EMPTY_TEXT, composeDigest, digestWindow, emptyPeriodText, formatItemsInput, parsePeriod, periodHeader, periodSpan, rowsInPeriod, selectPending, shortHistorySources } from '../lib/digest.js';
 import { LlmError, ask, extractTerms, summarize } from '../lib/llm.js';
-import { addInterestTerms, clarifyTerms, countInterestSources, fallbackTerms, interestFsmKey, matchInterestTerms, parseInterests, parseTermList } from '../lib/interests.js';
+import { addInterestTerms, clarifyTerms, containsWholeWords, countInterestSources, fallbackTerms, interestFsmKey, matchInterestTerms, parseInterests, parseTermList } from '../lib/interests.js';
 import { collectAll } from '../lib/collect.js';
 import * as store from '../lib/store.js';
 import { chunkMessage, escapeHtml, isoFromMs, isoNow, plural } from '../lib/text.js';
@@ -209,7 +209,7 @@ async function runDigest(chatId, periodHint = null) {
       if (collected.partial.length) notes.push(`ℹ️ Собрано неполно: ${collected.partial.length} источник(ов)`);
       // FR-11: пустой явный период называет период и цифры сбора, неявный — подсказывает период.
       const head = explicit
-        ? emptyPeriodText({ span: periodSpan(periodFrom, periodTo, tzOffsetMin), fastCount: rotated.length, deferred, errors: collected.errors.length })
+        ? emptyPeriodText({ span: periodSpan(periodFrom, periodTo, tzOffsetMin), polled: rotated.length, deferred, errors: collected.errors.length })
         : EMPTY_TEXT;
       await send(chatId, [head, ...notes].join('\n\n'));
       await store.setJob(jobId, { status: 'done', stage: 'empty', detail: 'новостей нет' });
@@ -220,6 +220,7 @@ async function runDigest(chatId, periodHint = null) {
     await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')}…`);
     const interestsText = await store.getInterests(chatId);
     let summary;
+    let truncated = false;
     try {
       summary = await summarize(formatItemsInput(selected, config.digest.textCap), interestsText, null, {
         thinking: budget.thinking,
@@ -229,7 +230,11 @@ async function runDigest(chatId, periodHint = null) {
     } catch (error) {
       // Обрезка по max_tokens: вход не влез в выходной бюджет. Один повтор с половиной
       // пунктов (и те же лимиты) дешевле, чем честная ошибка вместо сводки.
-      if (error?.name !== 'LlmTruncatedError' || left() < 12000 || selected.length < 6) throw error;
+      // Обрезанный текст лучше ошибки: он полон по смыслу, просто короче (пометка ниже).
+      if (error?.name === 'LlmTruncatedError' && String(error.partial ?? '').length > 400) {
+        summary = String(error.partial);
+        truncated = true;
+      } else if (error?.name !== 'LlmTruncatedError' || left() < 12000 || selected.length < 6) throw error;
       const half = selected.slice(0, Math.max(5, Math.floor(selected.length / 2)));
       console.log(`LLM обрезала ответ, повтор с ${half.length} пунктами`);
       summary = await summarize(formatItemsInput(half, config.digest.textCap), interestsText, null, {
@@ -240,6 +245,8 @@ async function runDigest(chatId, periodHint = null) {
       selected.splice(half.length);
     }
     // FR-3: если набор совпал с прошлой сводкой — честная пометка вместо тишины.
+    // Честная пометка: текст полный по смыслу, но модель не дописала до конца.
+    if (truncated) summary += '\n\n⚠️ Сводка сокращена: ответ не влез в лимит вызова.';
     const sameAs = explicit ? await previousDigestAt(chatId, selected) : null;
     const text = composeDigest({
       header: periodHeader(periodFrom, periodTo, tzOffsetMin),
@@ -431,7 +438,10 @@ async function removeInterestFlow(chatId, target) {
     await send(chatId, [`ℹ️ Такого интереса нет: ${escapeHtml(target || '—')}.`, '', interestsListText(await interestsRows(chatId))].join('\n'));
     return;
   }
-  if (matches.length > 1) {
+  // Кнопки — когда названный обрывок разрастается в разные интересы («ставк» → «ставка фрс»
+  // и «ставки по ипотеке»). Если слово есть в профиле целиком, выбора нет: «убери золото»
+  // убирает все вхождения сразу (P2-7).
+  if (matches.length > 1 && !matches.every((line) => containsWholeWords(line, target))) {
     const terms = matches.slice(0, 5);
     await store.setFsm(interestFsmKey(chatId), 'await_interest', { mode: 'remove', terms });
     await botApi('sendMessage', {
@@ -442,12 +452,14 @@ async function removeInterestFlow(chatId, target) {
     return;
   }
   // Фраза пользователя, а не строка профиля: убирается термин, а источники ищутся по нему (FR-6).
-  await dropInterest(chatId, target);
+  await dropInterest(chatId, target, true);
 }
 
-/** Убирает интерес и его источники; снимок в fsm — для кнопки «↩️ Вернуть» (FR-6). */
-async function dropInterest(chatId, term) {
-  const snapshot = await store.removeInterest(chatId, term);
+/** Убирает интерес и его источники; снимок в fsm — для кнопки «↩️ Вернуть» (FR-6).
+ * all — текстом названный термин убирается во всех местах профиля (P2-7); выбор кнопкой
+ * указывает на конкретную строку, поэтому там — только первое совпадение. */
+async function dropInterest(chatId, term, all = false) {
+  const snapshot = await store.removeInterest(chatId, term, all);
   if (!snapshot) {
     await send(chatId, `ℹ️ Такого интереса нет: ${escapeHtml(term)}.`);
     return null;
@@ -476,10 +488,10 @@ async function previousDigestAt(chatId, selected) {
  * Период из фразы уходит в окно контекста (FR-4): «сводка по золоту за неделю» — не 24 часа. */
 async function answerQuestion(chatId, question, periodHint = null) {
   const config = await loadConfig();
-  const explicit = periodHint
-    ? parsePeriod(periodHint, { nowMs: Date.now(), tzOffsetMin: await store.getTzOffsetMin(chatId), maxDays: config.digest.windowDays })
-    : null;
-  const window = explicit && !explicit.invalid && !explicit.future
+  const tzOffsetMin = await store.getTzOffsetMin(chatId);
+  const explicit = periodHint ? parsePeriod(periodHint, { nowMs: Date.now(), tzOffsetMin, maxDays: config.digest.windowDays }) : null;
+  const usable = Boolean(explicit) && !explicit.invalid && !explicit.future;
+  const window = usable
     ? { fromMs: explicit.fromMs, toMs: explicit.toMs, capped: explicit.capped }
     : digestWindow({
       nowMs: Date.now(),
@@ -487,7 +499,9 @@ async function answerQuestion(chatId, question, periodHint = null) {
       windowDays: config.digest.windowDays,
       firstWindowHours: config.digest.firstWindowHours,
     });
-  const rows = await store.recentItems(chatId, window.fromMs, 40);
+  // Закрытое окно («вчера», «с A по B») ограничивает ленту и сверху (P2-11): иначе на «что
+  // было по золоту с 1 октября» в контекст попадают сегодняшние пункты.
+  const rows = await store.recentItems(chatId, window.fromMs, 40, usable && !explicit.openEnd ? window.toMs : null);
   const last = await store.lastDigest(chatId);
   const feed = rows
     .map((row) => `${escapeHtml(row.title)} — ${escapeHtml(row.url)}${row.gist ? `\nВЫЖИМКА: ${escapeHtml(row.gist)}` : ''}`)
@@ -516,9 +530,14 @@ async function answerQuestion(chatId, question, periodHint = null) {
   await store.appendHistory(chatId, 'assistant', answer);
 }
 
+/** Отправка текста: длинное сообщение режется на части ≤ лимита (P2-9) — иначе Telegram
+ * отклоняет его целиком и пользователь не видит ничего (так падал /interests на большом профиле). */
 async function send(chatId, text) {
-  await botApi('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
-    .catch((error) => console.error('sendMessage:', error?.message ?? error));
+  const config = await loadConfig();
+  for (const chunk of chunkMessage(text, config.digest.messageLimit)) {
+    await botApi('sendMessage', { chat_id: chatId, text: chunk, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
+      .catch((error) => console.error('sendMessage:', error?.message ?? error));
+  }
 }
 
 async function typing(chatId) {

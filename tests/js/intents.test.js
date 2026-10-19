@@ -33,6 +33,14 @@ test('P1-2: пунктуация не убивает период в фразе 
   }
 });
 
+test('P2-2: пунктуация внутри фразы — период находится и уходит в интент', () => {
+  for (const text of ['за 3 дня, пожалуйста', 'дай новости за 3 дня, пожалуйста', 'сводка (за 3 дня)', 'за 3 дня!']) {
+    const intent = route(text);
+    assert.equal(intent.kind, 'digest', text);
+    assert.ok(parsePeriod(intent.periodHint), text);
+  }
+});
+
 test('P1-3: период раньше интересов — «интересно, что там за неделю» это сводка', () => {
   const intent = route('интересно, что там за неделю');
   assert.equal(intent.kind, 'digest');

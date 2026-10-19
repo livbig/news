@@ -2,7 +2,7 @@
 // Семантика из Python-версии (bot/digest.py + db.pending_items, iter-19/21),
 // плюс решение пользователя 2026-10-19: окно не больше 7 дней.
 
-import { escapeHtml, normalizeTitle } from './text.js';
+import { escapeHtml, normalizeTitle, plural } from './text.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -123,8 +123,10 @@ export function parsePeriod(hint, { nowMs = Date.now(), tzOffsetMin = 180, maxDa
   const text = String(hint ?? '')
     .toLowerCase()
     .replace(/ё/g, 'е')
-    // Знак препинания по краям — не часть периода: «а что было вчера?», «за 3 дня.», «с 1 октября?».
-    .replace(/^[«"'(]+|[»"')?!.,;:…]+$/g, '')
+    // Знак препинания — не часть периода: «а что было вчера?», «за 3 дня, пожалуйста»,
+    // «сводка (за 3 дня)». Точку снимаем только вне чисел — она разделяет даты («12.10»).
+    .replace(/[«»"'(),;:!?…]/g, ' ')
+    .replace(/\./g, (dot, index, all) => (/\d/.test(all[index - 1] ?? '') && /\d/.test(all[index + 1] ?? '') ? '.' : ' '))
     .replace(/\s+/g, ' ')
     .trim();
   if (!text) return null;
@@ -152,20 +154,31 @@ export function parsePeriod(hint, { nowMs = Date.now(), tzOffsetMin = 180, maxDa
   if (/(^|\s)вчера(\s|$)/.test(text)) return finish(todayStart - DAY_MS, todayStart, 'вчера');
   if (/(^|\s)сегодня(\s|$)/.test(text)) return finish(todayStart, nowMs, 'сегодня');
 
-  // «с 1 по 5 октября» / «с 1 по 5»: конец — полночь дня после конца диапазона.
+  // «с 1 по 5 октября» / «с 12 октября по 18 октября»: месяц может стоять после каждой
+  // даты — «с 30 сентября по 2 октября» раньше читалось как «с первой даты» без конца (P2-1).
   const range = text.match(
-    new RegExp(`(?:^|\\s)(?:с|со)\\s+(\\d{1,2})(?:[./](\\d{1,2}))?\\s+по\\s+(\\d{1,2})(?:[./](\\d{1,2}))?(?:\\s+(${MONTH_WORD}))?(?:\\s|$)`),
+    new RegExp(
+      `(?:^|\\s)(?:с|со)\\s+(?<fromDay>\\d{1,2})(?:[./](?<fromNum>\\d{1,2}))?(?:\\s+(?<fromWord>${MONTH_WORD}))?`
+        + `\\s+по\\s+(?<toDay>\\d{1,2})(?:[./](?<toNum>\\d{1,2}))?(?:\\s+(?<toWord>${MONTH_WORD}))?(?:\\s|$)`,
+    ),
   );
   if (range) {
-    const fromDay = Number(range[1]);
-    const toDay = Number(range[3]);
-    const month = monthIndex(range[5]) ?? numberMonth(range[4] ?? range[2]) ?? today.month;
+    const { fromDay, fromNum, fromWord, toDay, toNum, toWord } = range.groups;
+    const from = Number(fromDay);
+    const to = Number(toDay);
+    const fromMonth = monthIndex(fromWord) ?? numberMonth(fromNum) ?? monthIndex(toWord) ?? numberMonth(toNum) ?? today.month;
+    // Месяц конца берётся из его собственной даты: диапазон может идти через границу месяца.
+    const toMonth = monthIndex(toWord) ?? numberMonth(toNum) ?? fromMonth;
     let year = today.year;
-    if (dayStartOf(year, month, fromDay, tz) > nowMs) year -= 1;
-    const label = `${pad2(fromDay)}.${pad2(month + 1)}–${pad2(toDay)}.${pad2(month + 1)}`;
+    if (dayStartOf(year, fromMonth, from, tz) > nowMs) year -= 1;
+    const toYear = toMonth < fromMonth ? year + 1 : year; // «с 28 декабря по 3 января»
+    // Один день одним числом: «с 25 по 25 октября» — это «25.10», а не «25.10–25.10».
+    const label = fromMonth === toMonth && from === to
+      ? `${pad2(from)}.${pad2(fromMonth + 1)}`
+      : `${pad2(from)}.${pad2(fromMonth + 1)}–${pad2(to)}.${pad2(toMonth + 1)}`;
     // «с 31 февраля» и «с 25 по 5» — не окно, а опечатка: кривое окно хуже отказа.
-    if (invalidDay(fromDay, month, year) || invalidDay(toDay, month, year) || toDay < fromDay) return invalid(label);
-    return finish(dayStartOf(year, month, fromDay, tz), dayStartOf(year, month, toDay + 1, tz), label);
+    if (invalidDay(from, fromMonth, year) || invalidDay(to, toMonth, toYear) || (toMonth === fromMonth && to < from)) return invalid(label);
+    return finish(dayStartOf(year, fromMonth, from, tz), dayStartOf(toYear, toMonth, to + 1, tz), label);
   }
 
   const iso = text.match(/(?:^|\s)(?:с|со|за)\s+(\d{4})-(\d{1,2})-(\d{1,2})(?:\s|$)/);
@@ -237,10 +250,15 @@ function invalidDay(day, month, year) {
  * Пункты в явном периоде (FR-2). Верхняя граница — только у закрытого окна, конец которого
  * в прошлом («за вчера», «с A по B»): у «за 3 дня» конец = момент запроса, а fetchedAt
  * свежесобранного пункта ставится на 5–14 с позже — фильтр выбрасывал весь текущий сбор.
+ * Закрытое окно считается по дате публикации (P2-8): пункт, опубликованный вчера и
+ * собранный сегодня, обязан попасть в «за вчера». fetchedAt — запасной вариант без published.
  */
 export function rowsInPeriod(candidates, period) {
   if (!period || period.invalid || period.openEnd) return candidates;
-  return candidates.filter((row) => Date.parse(row.fetchedAt) < period.toMs);
+  return candidates.filter((row) => {
+    const ms = Date.parse(row.published ?? '') || Date.parse(row.fetchedAt ?? '');
+    return ms >= period.fromMs && ms < period.toMs;
+  });
 }
 
 /**
@@ -368,11 +386,13 @@ export function composeDigest({ header, summary, capped = false, errors = [], pa
 }
 
 /** Пустой явный период (FR-11): цифры сбора честные — медленные источники отдельным счётом,
- * иначе «собрано 0 источников» врёт про те, которые в этом вызове не трогали (FR-9). */
-export function emptyPeriodText({ span, fastCount, deferred = 0, errors = 0 }) {
+ * иначе «собрано 0 источников» врёт про те, которые в этом вызове не трогали (FR-9).
+ * Число называется опросом, а не сбором: это источники, которые тронули в вызове, а не
+ * те, что дали пункты (P2-10); числа согласуются с существительным. */
+export function emptyPeriodText({ span, polled, deferred = 0, errors = 0 }) {
   const counted = deferred
-    ? `собрано ${fastCount} быстрых источников; каналы и страницы (${deferred}) в эту сводку не собирались`
-    : `собрано ${fastCount} источников`;
+    ? `опрошено ${plural(polled, 'быстрый источник', 'быстрых источника', 'быстрых источников')}; каналы и страницы (${deferred}) в эту сводку не собирались`
+    : `опрошено ${plural(polled, 'источник', 'источника', 'источников')}`;
   return `За период ${span} пунктов нет (${counted}, ошибок ${errors}).`;
 }
 

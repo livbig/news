@@ -135,9 +135,12 @@ async function call({ http, config, system, messages, maxTokens, thinking = true
   // Раньше такой текст уходил как полный и помечал пункты прочитанными (ревью 2026-10-19).
   if (!result.stopReason) throw new LlmError('поток LLM оборван: нет stop_reason (сеть/таймаут)');
   if (result.stopReason === 'max_tokens') {
-    throw new LlmTruncatedError(
+    const error = new LlmTruncatedError(
       `ответ обрезан по max_tokens=${maxTokens} (выход ${result.usage?.output_tokens ?? '?'} токенов)`,
     );
+    // Обрезанный текст — всё ещё сводка: отдаём его наверх, чтобы вызов не пропадал.
+    error.partial = result.text;
+    throw error;
   }
   return result.text;
 }

@@ -131,6 +131,38 @@ test('без периода — null (свободный текст не пре�
   }
 });
 
+test('P2-1: месяц после второй даты — закрытое окно, а не «с первой даты»', () => {
+  const sameMonth = parse('с 15 октября по 18 октября');
+  assert.equal(sameMonth.openEnd, false, 'верхняя граница на месте');
+  assert.equal(sameMonth.fromMs, Date.parse('2026-10-14T21:00:00Z'));
+  assert.equal(sameMonth.toMs, Date.parse('2026-10-18T21:00:00Z'));
+  assert.equal(sameMonth.label, '15.10–18.10');
+
+  const crossMonth = parse('с 30 сентября по 2 октября');
+  assert.equal(crossMonth.openEnd, false);
+  assert.equal(crossMonth.label, '30.09–02.10');
+  // целиком старше семи дней — схлопывается в точку на верхней границе, а не «по сейчас»
+  assert.equal(crossMonth.toMs, Date.parse('2026-10-02T21:00:00Z'));
+  assert.equal(crossMonth.fromMs, crossMonth.toMs);
+});
+
+test('P2-2: пунктуация внутри фразы не отсекает период', () => {
+  const cases = [
+    ['за 3 дня, пожалуйста', now - 3 * DAY],
+    ['дай новости за 3 дня, пожалуйста', now - 3 * DAY],
+    ['сводка (за 3 дня)', now - 3 * DAY],
+    ['за 3 дня!', now - 3 * DAY],
+    ['за 3 дня. пожалуйста', now - 3 * DAY],
+  ];
+  for (const [hint, fromMs] of cases) {
+    const period = parse(hint);
+    assert.ok(period, `период разобран: ${hint}`);
+    assert.equal(period.fromMs, fromMs, hint);
+  }
+  // точка внутри числа остаётся разделителем даты
+  assert.equal(parse('с 16.10!').fromMs, Date.parse('2026-10-15T21:00:00Z'));
+});
+
 test('P2: несуществующая дата — честный отказ, а не тихо неверное окно', () => {
   for (const hint of ['с 31 февраля', 'с 30 февраля 2024', 'с 30.02.2024', 'с 25 по 5', 'с 1.13']) {
     const period = parse(hint);
@@ -155,6 +187,18 @@ test('P0-1: свежесобранные пункты входят в сводк
     assert.equal(period.openEnd, true, hint);
     assert.deepEqual(rowsInPeriod(freshRows, period).map((row) => row.id), [1, 2, 3], hint);
   }
+});
+
+test('P2-8: закрытое окно считается по дате публикации, а не по сбору', () => {
+  const yesterday = parse('за вчера'); // [18.10 00:00 MSK; 19.10 00:00 MSK)
+  const rows = [
+    { id: 1, sourceId: 1, published: '2026-10-18T10:00:00Z', fetchedAt: '2026-10-19T08:55:00Z' }, // вчера, собран сегодня
+    { id: 2, sourceId: 1, published: '2026-10-19T05:00:00Z', fetchedAt: '2026-10-19T05:01:00Z' }, // сегодня
+    { id: 3, sourceId: 1, published: '2026-10-17T12:00:00Z', fetchedAt: '2026-10-18T04:00:00Z' }, // позавчера
+  ];
+  assert.deepEqual(rowsInPeriod(rows, yesterday).map((row) => row.id), [1]);
+  // открытые окна — как раньше: свежесобранное не отсекается
+  assert.deepEqual(rowsInPeriod(rows, parse('за 3 дня')).map((row) => row.id), [1, 2, 3]);
 });
 
 test('P0-1: у окна с концом в прошлом верхняя граница работает', () => {

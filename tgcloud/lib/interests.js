@@ -144,6 +144,18 @@ function wordsMatch(a, b) {
   return prefix >= min - 2;
 }
 
+/** Термин назван в профиле целиком, как слово («золото» в «золото физическое»), а не
+ * обрывком по префиксу («ставк» в «ставка фрс»): обрывок — повод для кнопок, целое слово — нет (P2-7). */
+export function containsWholeWords(text, target) {
+  const words = normalizeTerm(text).split(' ').filter(Boolean);
+  const wanted = normalizeTerm(target).split(' ').filter(Boolean);
+  return wanted.length > 0 && wanted.every((word) => words.includes(word));
+}
+
+/** Степень проработки темы в профиле («глубоко», «очень кратко») — подпись, а не интерес:
+ * без этой проверки после удаления термина она становилась новым интересом (P2-6). */
+const DEGREE = /^(?:(?:очень|максимально|крайне|совсем)\s+)?(?:кратко|коротко|глубоко|детально|подробно)$/;
+
 /** Разделители терминов внутри строки профиля: «золото, платина», «палладий — глубоко». */
 const TERM_SEPARATOR = /(\s*[,;]\s*|\s+[—–-]\s+|\s*\/\s*)/;
 
@@ -151,24 +163,33 @@ const TERM_SEPARATOR = /(\s*[,;]\s*|\s+[—–-]\s+|\s*\/\s*)/;
  * Удалить интерес из профиля (FR-6). Профиль из интервью — структурированный текст
  * («Драгметаллы: золото, платина, палладий — глубоко»), поэтому убирается только сам термин:
  * соседние термины, подпись строки и остальные строки остаются. Нет совпадения — профиль байт-в-байт.
+ * all — убрать все вхождения термина («убери золото» текстом, P2-7); выбор кнопкой указывает
+ * на конкретную строку профиля, поэтому там удаляется только первое совпадение.
  */
-export function removeInterestTerm(text, target) {
+export function removeInterestTerm(text, target, all = false) {
   const base = String(text ?? '').trim();
   const wanted = normalizeTerm(target);
   if (!wanted) return { text: base, removed: null };
-  const terms = parseInterests(base);
-  const index = terms.findIndex((term) => termsMatch(term, wanted));
-  if (index < 0) return { text: base, removed: null };
-  const term = terms[index];
-  // Выбор из кнопок приходит целым термином — тогда убирается он; иначе режем слово
-  // внутри термина, сохраняя соседей («убери робототехнику» из «индустриальная робототехника»).
-  const cut = normalizeTerm(term) === wanted ? { text: '', removed: term } : cutTermFromLine(term, wanted);
-  if (!cut.removed) return { text: base, removed: null };
-  // ponytail: профиль после правки нормализуется в «термин, термин» вместо сохранения
-  // исходного абзаца; когда понадобится дословная вёрстка профиля — хранить термины списком.
-  const kept = terms.filter((_, i) => i !== index);
-  if (cut.text.trim().length >= 3) kept.splice(index, 0, cut.text.trim());
-  return { text: kept.join(', '), removed: cut.removed };
+  let terms = parseInterests(base);
+  const removed = [];
+  for (;;) {
+    const index = terms.findIndex((term) => termsMatch(term, wanted));
+    if (index < 0) break;
+    const term = terms[index];
+    // Выбор из кнопок приходит целым термином — тогда убирается он; иначе режем слово
+    // внутри термина, сохраняя соседей («убери робототехнику» из «индустриальная робототехника»).
+    const cut = normalizeTerm(term) === wanted ? { text: '', removed: term } : cutTermFromLine(term, wanted);
+    if (!cut.removed) break;
+    removed.push(cut.removed);
+    // ponytail: профиль после правки нормализуется в «термин, термин» вместо сохранения
+    // исходного абзаца; когда понадобится дословная вёрстка профиля — хранить термины списком.
+    terms = terms.filter((_, i) => i !== index);
+    const rest = cut.text.trim();
+    if (rest.length >= 3 && !DEGREE.test(normalizeTerm(rest))) terms.splice(index, 0, rest);
+    if (!all) break;
+  }
+  if (!removed.length) return { text: base, removed: null };
+  return { text: terms.join(', '), removed: [...new Set(removed)].join(', ') };
 }
 
 /** Вырезать термин из строки профиля. Подпись блока («Драгметаллы:») — имя категории:

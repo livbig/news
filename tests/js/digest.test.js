@@ -109,9 +109,17 @@ test('P1-8: источник, у которого самый старый пун
 
 test('P1-4: пустой период не врёт про «собрано 0», когда медленные не трогали', async () => {
   const { emptyPeriodText } = await import('../../tgcloud/lib/digest.js');
-  const text = emptyPeriodText({ span: '13.10 – 19.10', fastCount: 0, deferred: 3, errors: 0 });
+  const text = emptyPeriodText({ span: '13.10 – 19.10', polled: 0, deferred: 3, errors: 0 });
   assert.match(text, /За период 13\.10 – 19\.10 пунктов нет/);
   assert.match(text, /каналы и страницы \(3\) в эту сводку не собирались/);
-  assert.ok(!/собрано 0 источников/.test(text), 'нельзя говорить «собрано 0» про несобранное');
-  assert.equal(emptyPeriodText({ span: '19.10', fastCount: 4, errors: 1 }), 'За период 19.10 пунктов нет (собрано 4 источников, ошибок 1).');
+});
+
+test('P2-10: пустой период согласует число и не называет опрос сбором', async () => {
+  const { emptyPeriodText } = await import('../../tgcloud/lib/digest.js');
+  assert.equal(emptyPeriodText({ span: '19.10', polled: 4, errors: 1 }), 'За период 19.10 пунктов нет (опрошено 4 источника, ошибок 1).');
+  assert.match(emptyPeriodText({ span: '19.10', polled: 1, errors: 0 }), /опрошено 1 источник,/);
+  assert.match(emptyPeriodText({ span: '19.10', polled: 5, errors: 0 }), /опрошено 5 источников,/);
+  const slow = emptyPeriodText({ span: '19.10', polled: 3, deferred: 2, errors: 1 });
+  assert.match(slow, /опрошено 3 быстрых источника/);
+  assert.match(slow, /каналы и страницы \(2\)/);
 });
