@@ -11,7 +11,8 @@ import { LlmError, ask, summarize } from '../lib/llm.js';
 import { collectAll } from '../lib/collect.js';
 import * as store from '../lib/store.js';
 import { chunkMessage, escapeHtml, isoFromMs, isoNow, plural } from '../lib/text.js';
-import { helpText, settingsText, sourcesText, statsText } from '../lib/render.js';
+import { helpText, settingsText, statsText } from '../lib/render.js';
+import { detectSource, sourcesView } from '../lib/sources-ui.js';
 
 export default async function onMessage(message) {
   const chatId = message?.chat?.id;
@@ -29,6 +30,12 @@ export default async function onMessage(message) {
     }
     if (intent.kind === 'digest') {
       await runDigest(chatId);
+      return;
+    }
+    // Ждём ссылку на источник, если пользователь нажал «Добавить».
+    const fsm = await store.getFsm(String(chatId));
+    if (fsm?.state === 'await_source') {
+      await addSourceFromInput(chatId, text);
       return;
     }
     await answerQuestion(chatId, text);
@@ -61,7 +68,7 @@ async function handleCommand(chatId, { command }) {
     return;
   }
   if (command === 'sources') {
-    await send(chatId, sourcesText(await store.listSources(chatId)));
+    await sendSources(chatId);
     return;
   }
   await send(chatId, command === 'help' ? helpText(config.sources.max) : settingsText());
@@ -204,6 +211,39 @@ async function sendChunk(chatId, text, plain) {
     console.error('sendMessage:', error?.message ?? error);
     return false;
   }
+}
+
+/** Список источников с кнопками (управление без Python-бота). */
+async function sendSources(chatId) {
+  const view = sourcesView(await store.listSources(chatId));
+  await botApi('sendMessage', {
+    chat_id: chatId,
+    text: view.text,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: view.keyboard },
+  }).catch((error) => console.error('sendSources:', error?.message ?? error));
+}
+
+/** Добавление источника из ответа пользователя (после кнопки «Добавить»). */
+async function addSourceFromInput(chatId, input) {
+  const detected = detectSource(input);
+  if (!detected.kind) {
+    await send(chatId, `⚠️ ${escapeHtml(detected.reason ?? 'не понял')}. Пример: <code>https://example.com/feed.xml</code> или <code>@channel</code>`);
+    return;
+  }
+  const config = await loadConfig();
+  const count = (await store.listSources(chatId)).length;
+  if (count >= config.sources.max) {
+    await send(chatId, `⚠️ Лимит источников: ${config.sources.max}. Удали лишние в /sources.`);
+    return;
+  }
+  const added = await store.addSource(chatId, { kind: detected.kind, url: detected.url, title: detected.url, origin: 'manual' });
+  await store.clearFsm(String(chatId)).catch(() => {});
+  await send(chatId, added.created
+    ? `✅ Добавил: ${escapeHtml(detected.url)} (${detected.kind}). Соберётся при следующей сводке — /sources.`
+    : `ℹ️ Такой источник уже есть: ${escapeHtml(detected.url)}`);
+  await sendSources(chatId);
 }
 
 /** Уточнения по темам и свободный диалог (R3): короткий вызов, влезает в инвокацию. */
