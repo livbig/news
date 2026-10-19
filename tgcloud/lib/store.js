@@ -302,19 +302,31 @@ export async function stats(chatId) {
   const owned = await db.select({ id: sources.id, status: sources.status }).from(sources).where(eq(sources.chatId, chatId)).all();
   const ids = owned.map((row) => row.id);
   const since = isoFromMs(Date.now() - DAY_MS);
+  // Считаем на стороне SQLite: limit(5000) делал статистику враньём после 5000 пунктов.
   let itemCount = 0;
   let freshCount = 0;
+  let digestCount = 0;
   if (ids.length) {
-    const all = await db.select({ id: items.id, fetchedAt: items.fetchedAt }).from(items).where(inArray(items.sourceId, ids)).limit(5000).all();
-    itemCount = all.length;
-    freshCount = all.filter((row) => String(row.fetchedAt) >= since).length;
+    try {
+      itemCount = await db.$count(items, inArray(items.sourceId, ids));
+      freshCount = await db.$count(items, and(inArray(items.sourceId, ids), gte(items.fetchedAt, since)));
+    } catch (error) {
+      console.warn('stats: $count недоступен, считаю выборкой:', error?.message ?? error);
+      const all = await db.select({ id: items.id, fetchedAt: items.fetchedAt }).from(items).where(inArray(items.sourceId, ids)).all();
+      itemCount = all.length;
+      freshCount = all.filter((row) => String(row.fetchedAt) >= since).length;
+    }
   }
-  const digestCount = await db.select({ id: digests.id }).from(digests).where(eq(digests.chatId, chatId)).limit(1000).all();
+  try {
+    digestCount = await db.$count(digests, eq(digests.chatId, chatId));
+  } catch {
+    digestCount = (await db.select({ id: digests.id }).from(digests).where(eq(digests.chatId, chatId)).all()).length;
+  }
   return {
     sources: owned.length,
     errors: owned.filter((row) => row.status === 'error').length,
     items: itemCount,
     fresh: freshCount,
-    digests: digestCount.length,
+    digests: digestCount,
   };
 }

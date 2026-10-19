@@ -58,19 +58,26 @@ while (Date.now() < deadline) {
     continue;
   }
   for (const update of data.result ?? []) {
-    offset = update.update_id + 1;
     const message = update.message ?? update.callback_query?.message;
+    const nextOffset = update.update_id + 1;
     if (!message?.chat?.id) {
+      offset = nextOffset;
       log('пропуск апдейта', update.update_id, '(нет сообщения)');
       continue;
     }
-    try {
-      run(update.callback_query ? 'handlers/callback_query' : 'handlers/message', update.callback_query ?? message);
-      handled += 1;
-      log('обработан апдейт', update.update_id, 'chat', message.chat.id);
-    } catch (error) {
-      log('ошибка обработки', update.update_id, error.message.slice(0, 300));
+    // Смещение двигаем ТОЛЬКО после успешной обработки (или после исчерпания повторов):
+    // иначе падение платформы съедает сообщение навсегда — инцидент iter-30.
+    let delivered = false;
+    for (let attempt = 1; attempt <= 2 && !delivered; attempt += 1) {
+      try {
+        run(update.callback_query ? 'handlers/callback_query' : 'handlers/message', update.callback_query ?? message);
+        delivered = true;
+      } catch (error) {
+        log(`ошибка обработки апдейта ${update.update_id} (попытка ${attempt}/2):`, error.message.slice(0, 300));
+      }
     }
+    if (delivered) handled += 1;
+    offset = nextOffset;
   }
   try {
     run('endpoints/pollState', { set: offset });

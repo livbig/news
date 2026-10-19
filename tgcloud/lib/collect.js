@@ -18,7 +18,10 @@ export async function collectAll(sources) {
   const partial = [];
   let added = 0;
   const queue = [...sources];
-  const workers = Math.max(1, Math.min(config.collect.workers, queue.length));
+  // Каналы — строго последовательно (как bot/collect.py): параллельные запросы к
+  // t.me/зеркалу ловят 429 и валят все каналы сразу.
+  const onlyChannels = queue.length > 0 && queue.every((row) => row.kind === 'tgweb');
+  const workers = onlyChannels ? 1 : Math.max(1, Math.min(config.collect.workers, queue.length));
 
   await Promise.all(
     Array.from({ length: workers }, async () => {

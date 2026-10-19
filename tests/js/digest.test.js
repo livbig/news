@@ -50,3 +50,20 @@ test('заголовок периода в московском времени',
   assert.equal(periodHeader('2026-10-17T10:00:00Z', '2026-10-19T06:00:00Z', 180), '<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД (17.10 – 19.10)</b>');
   assert.equal(periodHeader('2026-10-19T06:00:00Z', '2026-10-19T09:00:00Z', 180), '<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД (19.10)</b>');
 });
+
+test('composeDigest: честные пометки о несобранном и футер', async () => {
+  const { composeDigest } = await import('../../tgcloud/lib/digest.js');
+  const text = composeDigest({
+    header: '<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД (19.10)</b>',
+    summary: 'тело',
+    capped: true,
+    errors: [{ url: 'https://a' }],
+    partial: ['https://b'],
+    unsupported: ['https://news.ycombinator.com'],
+  });
+  assert.match(text, /Окно ограничено 7 днями|окно ограничено 7 днями/);
+  assert.match(text, /часть источников не отдаёт историю/);
+  assert.match(text, /не собираются: https:\/\/news\.ycombinator\.com/);
+  assert.match(text, /Не удалось собрать 1 источник/);
+  assert.ok(!composeDigest({ header: 'h', summary: 's' }).includes('ℹ️'), 'без проблем — без пометок');
+});

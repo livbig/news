@@ -107,6 +107,17 @@ export function degradedFooter(errors) {
   return `\n\n⚠ Не удалось собрать ${errors.length} источник(ов): ${listing}\nПодробности — /sources.`;
 }
 
+/** Итоговый текст сводки: заголовок + тело + честные пометки о несобранном.
+ * Чистая функция — покрыта тестом (ревью 2026-10-19: футер был объявлен, но не вызывался). */
+export function composeDigest({ header, summary, capped = false, errors = [], partial = [], unsupported = [] }) {
+  const notes = [];
+  if (capped) notes.push('окно ограничено 7 днями — более старое не запрашивается');
+  if (partial.length) notes.push(`часть источников не отдаёт историю за период (${partial.length}) — по ним сводка неполная`);
+  if (unsupported.length) notes.push(`не собираются: ${unsupported.join(', ')} (тип источника пока не перенесён)`);
+  const noteBlock = notes.length ? `\n\nℹ️ ${notes.join('; ')}.` : '';
+  return `${header}\n\n${summary}${noteBlock}${degradedFooter(errors)}`;
+}
+
 /** В сводке должна быть честная пометка пробелов: источник отдал только свежее (R2). */
 export function coverageNote({ capped, missingSources = [] }) {
   const parts = [];

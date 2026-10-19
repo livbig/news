@@ -56,7 +56,7 @@ async function handleCommand(chatId, { command }) {
   if (command === 'stats') {
     const data = await store.stats(chatId);
     const job = await store.latestJob(chatId);
-    const tail = job ? `\nПоследняя задача: ${job.status} (${job.stage ?? '—'}${job.detail ? `, ${job.detail}` : ''})` : '';
+    const tail = job ? `\nПоследняя задача: ${job.status} (${job.stage ?? '—'}${job.detail ? `, ${escapeHtml(job.detail)}` : ''})` : '';
     await send(chatId, `${statsText(data)}${tail}`);
     return;
   }
@@ -70,6 +70,13 @@ async function handleCommand(chatId, { command }) {
 /** Задача в БД + запуск воркера. Пользователь сразу видит, что работа пошла. */
 async function dispatchDigest(chatId) {
   const config = await loadConfig();
+  // Защита от параллельных прогонов (ревью 2026-10-19): второй воркер вычитывает
+  // те же пункты и дублирует сообщения.
+  const running = await store.latestJob(chatId);
+  if (running?.status === 'running' && Date.now() - Date.parse(running.updatedAt ?? '') < 15 * 60 * 1000) {
+    await send(chatId, `⏳ Сводка уже собирается (задача ${running.id}). Дождись результата — пришлю сюда.`);
+    return;
+  }
   const jobId = await store.createJob(chatId);
   if (!config.github.token || !config.github.repo) {
     await store.setJob(jobId, { status: 'failed', stage: 'dispatch', detail: 'нет GITHUB_DISPATCH_TOKEN/GITHUB_REPO' });

@@ -11,7 +11,11 @@ export class LlmError extends Error {}
 export class LlmTruncatedError extends LlmError {}
 
 function maskSecrets(text) {
-  return String(text ?? '').replace(/\b(sk|key)[-_A-Za-z0-9]{8,}/gi, '[ключ]').slice(0, 300);
+  return String(text ?? '')
+    .replace(/\b(sk|key)[-_A-Za-z0-9]{8,}/gi, '[ключ]')
+    .replace(/\bapp\d+:[A-Za-z0-9_-]+/g, '[токен платформы]')
+    .replace(/\b\d{8,}:[A-Za-z0-9_-]{30,}/g, '[токен бота]')
+    .slice(0, 300);
 }
 
 /** Разбор SSE-потока anthropic-messages. Вынесен отдельно: гоняется в тестах без сети. */
@@ -127,6 +131,9 @@ async function call({ http, config, system, messages, maxTokens, thinking = true
   }
 
   const result = await readStream(response, onProgress);
+  // Обрыв тела ответа (нет message_delta/message_stop) = недописанная сводка.
+  // Раньше такой текст уходил как полный и помечал пункты прочитанными (ревью 2026-10-19).
+  if (!result.stopReason) throw new LlmError('поток LLM оборван: нет stop_reason (сеть/таймаут)');
   if (result.stopReason === 'max_tokens') {
     throw new LlmTruncatedError(
       `ответ обрезан по max_tokens=${maxTokens} (выход ${result.usage?.output_tokens ?? '?'} токенов)`,
