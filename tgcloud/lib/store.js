@@ -6,6 +6,7 @@ import { db } from 'sdk';
 import { and, asc, desc, eq, gte, inArray, lt } from 'sdk/db';
 import { chatHistory, digestItems, digests, fsm, items, jobs, seenHashes, sources, users } from '../schema.js';
 import { isoFromMs, isoNow, normalizeTitle, urlHash } from './text.js';
+import { PROFILE_LIMIT, googleNewsUrl, interestSourceTitle, interestSourcesFor, parseTopics, removeInterestTerm } from './interests.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,6 +20,24 @@ export async function ensureUser(chatId) {
 export async function getInterests(chatId) {
   const row = await db.select({ interestsText: users.interestsText }).from(users).where(eq(users.chatId, chatId)).get();
   return row?.interestsText ?? null;
+}
+
+/** Профиль интересов целиком: лимит 4000 символов (FR-5). Переполненный не пишется. */
+export async function setInterests(chatId, text) {
+  const value = String(text ?? '').trim();
+  if (value.length > PROFILE_LIMIT) return false;
+  await db.update(users).set({ interestsText: value || null }).where(eq(users.chatId, chatId)).run();
+  return true;
+}
+
+/** Пояс читателя для периода: users.tz_offset_min, не константа в коде (FR-1).
+ * 0 — это UTC, а не «пустое значение»: `Number(tz) || 180` превращал его в московское время. */
+export async function getTzOffsetMin(chatId) {
+  const row = await db.select({ tz: users.tzOffsetMin }).from(users).where(eq(users.chatId, chatId)).get();
+  const value = row?.tz;
+  if (value == null || value === '') return 180;
+  const tz = Number(value);
+  return Number.isFinite(tz) ? tz : 180;
 }
 
 export async function getLastSentAt(chatId) {
@@ -84,6 +103,83 @@ export async function deleteSource(id, chatId) {
   await db.delete(seenHashes).where(eq(seenHashes.sourceId, id)).run();
   await db.delete(sources).where(eq(sources.id, id)).run();
   return true;
+}
+
+// --- интересы и их источники (FR-6…FR-8) -----------------------------------------
+
+/** Источники чата по термину интереса — уже отфильтрованные по origin и topics. */
+export async function interestSources(chatId, term) {
+  const rows = await db
+    .select()
+    .from(sources)
+    .where(and(eq(sources.chatId, chatId), eq(sources.origin, 'interest')))
+    .all();
+  return interestSourcesFor(term, rows);
+}
+
+/**
+ * Создание источников под интересы: 1 термин = 1 Google News RSS (FR-8).
+ * При достижении sources.max интерес всё равно пишется — источники нет, об этом скажем явно.
+ */
+export async function addInterestSources(chatId, terms, max = 100) {
+  let count = (await listSources(chatId)).length;
+  const created = [];
+  const existing = [];
+  const skipped = [];
+  for (const term of terms ?? []) {
+    if (count >= max) {
+      skipped.push(term);
+      continue;
+    }
+    const result = await addSource(chatId, {
+      kind: 'rss',
+      url: googleNewsUrl(term),
+      title: interestSourceTitle(term),
+      topics: [term],
+      origin: 'interest',
+    });
+    if (result.created) {
+      created.push(term);
+      count += 1;
+    } else {
+      existing.push(term);
+    }
+  }
+  return { created, existing, skipped };
+}
+
+/** Удаление интереса целиком: строка профиля + его источники с items и seen_hashes (FR-6).
+ * В снимке для «Вернуть» — профиль ДО удаления: иначе откат вернёт источники без термина. */
+export async function removeInterest(chatId, term) {
+  const current = String((await getInterests(chatId)) ?? '');
+  const removed = removeInterestTerm(current, term);
+  if (!removed.removed) return null;
+  const rows = await interestSources(chatId, removed.removed);
+  let removedSources = 0;
+  for (const row of rows) {
+    if (await deleteSource(row.id, chatId)) removedSources += 1;
+  }
+  await setInterests(chatId, removed.text);
+  return {
+    term: removed.removed,
+    profile: current,
+    removedSources,
+    sources: rows.map((row) => ({ kind: row.kind, url: row.url, title: row.title, topics: parseTopics(row.topics), origin: row.origin })),
+  };
+}
+
+/** «↩️ Вернуть»: профиль и источники из снимка в fsm (FR-6).
+ * ponytail: откат кладёт профиль из снимка, а не мержит с текущим; окно 10 минут,
+ * усложнять — если после удаления успевают появиться другие правки. */
+export async function restoreInterest(chatId, snapshot) {
+  if (!snapshot?.profile && !snapshot?.sources?.length) return 0;
+  await setInterests(chatId, snapshot.profile ?? '');
+  let restored = 0;
+  for (const row of snapshot.sources ?? []) {
+    const result = await addSource(chatId, { kind: row.kind, url: row.url, title: row.title, topics: row.topics ?? [], origin: row.origin ?? 'interest' });
+    if (result.created) restored += 1;
+  }
+  return restored;
 }
 
 // --- пункты ----------------------------------------------------------------------
@@ -194,8 +290,10 @@ export async function consumedKeys(chatId) {
   return { urls, titles };
 }
 
-/** Фиксация сводки: digests → digest_items → users.last_sent_at (последним: окно едет за фактом отправки). */
-export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds }) {
+/** Фиксация сводки: digests → digest_items → users.last_sent_at (последним: окно едет за фактом отправки).
+ * Сводка за явный период якорь НЕ двигает (FR-2): иначе следующая неявная сводка
+ * начнётся с конца периода и пропустит более свежее. */
+export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds }, { moveAnchor = true } = {}) {
   const inserted = await db
     .insert(digests)
     .values({ chatId, periodFrom, periodTo, itemCount: itemIds.length, messageText: text.slice(0, 200000), createdAt: isoNow() })
@@ -206,8 +304,16 @@ export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds
   if (itemIds.length) {
     await db.insert(digestItems).values(itemIds.map((itemId) => ({ digestId, itemId }))).run();
   }
-  await db.update(users).set({ lastSentAt: periodTo }).where(eq(users.chatId, chatId)).run();
+  if (moveAnchor) await db.update(users).set({ lastSentAt: periodTo }).where(eq(users.chatId, chatId)).run();
   return digestId;
+}
+
+/** Пункты последней сводки: пометка «те же пункты» (FR-3). */
+export async function lastDigestItemIds(chatId) {
+  const row = await db.select({ id: digests.id }).from(digests).where(eq(digests.chatId, chatId)).orderBy(desc(digests.id)).limit(1).get();
+  if (!row) return [];
+  const links = await db.select({ itemId: digestItems.itemId }).from(digestItems).where(eq(digestItems.digestId, row.id)).all();
+  return links.map((link) => link.itemId);
 }
 
 /** Последняя сводка чата: контекст для «второй пункт», «подробнее» (R3). */

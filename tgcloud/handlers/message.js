@@ -6,13 +6,16 @@
 import { botApi } from '../lib/telegram.js';
 import { gate, loadConfig } from '../lib/config.js';
 import { route } from '../lib/intents.js';
-import { EMPTY_TEXT, composeDigest, digestWindow, formatItemsInput, periodHeader, selectPending } from '../lib/digest.js';
-import { LlmError, ask, summarize } from '../lib/llm.js';
+import { EMPTY_TEXT, composeDigest, digestWindow, emptyPeriodText, formatItemsInput, parsePeriod, periodHeader, periodSpan, rowsInPeriod, selectPending, shortHistorySources } from '../lib/digest.js';
+import { LlmError, ask, extractTerms, summarize } from '../lib/llm.js';
+import { addInterestTerms, clarifyTerms, countInterestSources, fallbackTerms, interestFsmKey, matchInterestTerms, parseInterests, parseTermList } from '../lib/interests.js';
 import { collectAll } from '../lib/collect.js';
 import * as store from '../lib/store.js';
 import { chunkMessage, escapeHtml, isoFromMs, isoNow, plural } from '../lib/text.js';
-import { helpText, settingsText, statsText } from '../lib/render.js';
+import { helpText, interestsListText, settingsText, statsText } from '../lib/render.js';
 import { detectSource, sourcesView } from '../lib/sources-ui.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default async function onMessage(message) {
   const chatId = message?.chat?.id;
@@ -29,7 +32,12 @@ export default async function onMessage(message) {
       return;
     }
     if (intent.kind === 'digest') {
-      await runDigest(chatId);
+      await runDigest(chatId, intent.periodHint);
+      return;
+    }
+    // Интересы — до режима добавления источника: триггеры явные (FR-5…FR-7).
+    if (intent.kind === 'interests') {
+      await handleInterests(chatId, intent, text);
       return;
     }
     // Ждём ссылку на источник, если пользователь нажал «Добавить».
@@ -39,7 +47,7 @@ export default async function onMessage(message) {
       await addSourceFromInput(chatId, text);
       return;
     }
-    await answerQuestion(chatId, text);
+    await answerQuestion(chatId, text, intent.periodHint);
   } catch (error) {
     console.error('handler упал:', error?.stack ?? error);
     await send(chatId, `⚠️ Ошибка: ${escapeHtml(String(error?.message ?? error)).slice(0, 300)}`);
@@ -61,6 +69,10 @@ async function handleCommand(chatId, { command }) {
     await runDigest(chatId);
     return;
   }
+  if (command === 'interests') {
+    await sendInterests(chatId);
+    return;
+  }
   if (command === 'stats') {
     const data = await store.stats(chatId);
     const job = await store.latestJob(chatId);
@@ -80,11 +92,24 @@ async function handleCommand(chatId, { command }) {
  * Внешних исполнителей нет. Бюджет платформы (~30 с) делится явно: сбор упирается
  * в deadline, LLM идёт с меньшим усилием и компактным входом (config.inline).
  */
-async function runDigest(chatId) {
+async function runDigest(chatId, periodHint = null) {
   const config = await loadConfig();
   const budget = config.inline;
   const started = Date.now();
   const left = () => budget.hardDeadlineMs - (Date.now() - started);
+
+  // Явный период из текста (FR-1): конец периода, пояс и глубина — из настроек читателя.
+  const tzOffsetMin = await store.getTzOffsetMin(chatId);
+  const explicit = periodHint ? parsePeriod(periodHint, { nowMs: started, tzOffsetMin, maxDays: config.digest.windowDays }) : null;
+  if (explicit?.invalid) {
+    // «с 31 февраля»: окно не выдумываем, просим уточнить (FR-1).
+    await send(chatId, `📅 Не понял период (${escapeHtml(explicit.label)}): такой даты нет. Уточни, например «за 3 дня» или «с 1 октября».`);
+    return;
+  }
+  if (explicit?.future) {
+    await send(chatId, `📅 Этот период ещё не начался (${escapeHtml(explicit.label)}) — сводки за него нет, якорь не двигался.`);
+    return;
+  }
 
   const running = await store.latestJob(chatId);
   // Порог меньше максимального времени вызова (~30 с): убитая платформой задача
@@ -101,7 +126,7 @@ async function runDigest(chatId) {
   let totalChunks = 0;
   let jobDone = false;
   let slowPlan = []; // медленные источники: собираются после отправки сводки
-  const status = await statusHandle(chatId, '🔎 Собираю ленту…');
+  const status = await statusHandle(chatId, explicit ? `🔎 Собираю за ${explicit.label}…` : '🔎 Собираю ленту…');
   await typing(chatId);
   try {
     // Ленивый retention вместо cron (D47): дешёвый проход, ошибки не валят сводку.
@@ -134,7 +159,10 @@ async function runDigest(chatId) {
     await store.setFsm('collect:cursor', 'cursor', { value: fast.length ? (fastCursor + fastBatch.length) % fast.length : 0 }).catch(() => {});
     // Медленные (каналы через зеркало до 12 с, html-страницы) в сводку этого вызова
     // не идут: их сбор — отдельный шаг после отправки, чтобы не отнимать время у LLM.
-    slowPlan = slow.length ? rotate(slow, slowCursor, 1) : [];
+    // Для сводки за период они не собираются вовсе (FR-9) — пункты уйдут в следующую,
+    // а в сводке об этом будет пометка (deferred), чтобы «собрано 0» не было ложью.
+    slowPlan = !explicit && slow.length ? rotate(slow, slowCursor, 1) : [];
+    const deferred = explicit ? slow.length : 0;
     const rotated = fastBatch;
     const collected = await collectAll(rotated, {
       deadlineMs: Math.max(3000, Math.min(budget.collectDeadlineMs, left() - 14000)),
@@ -142,12 +170,20 @@ async function runDigest(chatId) {
     });
 
     collected.partial.push(...collectedSkipped);
-    const window = digestWindow({ nowMs: Date.now(), lastSentAt: await store.getLastSentAt(chatId), windowDays: config.digest.windowDays, firstWindowHours: config.digest.firstWindowHours });
+    const window = explicit
+      ? { fromMs: explicit.fromMs, toMs: explicit.toMs, capped: explicit.capped }
+      : digestWindow({ nowMs: Date.now(), lastSentAt: await store.getLastSentAt(chatId), windowDays: config.digest.windowDays, firstWindowHours: config.digest.firstWindowHours });
     // Кандидаты — ВСЁ за последние 7 дней, а не только после прошлой сводки:
     // непоместившиеся в лимит 45 пунктов должны попасть в следующую (P0 ревью 2026-10-19).
-    const eligibilityMs = Date.now() - config.digest.windowDays * 24 * 60 * 60 * 1000;
-    const rows = await store.pendingRows(chatId, eligibilityMs);
-    const consumed = await store.consumedKeys(chatId);
+    const eligibilityMs = explicit ? explicit.fromMs : Date.now() - config.digest.windowDays * DAY_MS;
+    const candidates = await store.pendingRows(chatId, eligibilityMs);
+    // Явный период: верхняя граница работает только у закрытого окна (конец в прошлом),
+    // иначе отсекалось всё, что этот же вызов только что собрал (P0 ревью 2026-10-19).
+    const rows = explicit ? rowsInPeriod(candidates, explicit) : candidates;
+    // FR-3: история источника короче запрошенного периода — честная пометка в сводке.
+    const shortHistory = explicit ? shortHistorySources(candidates, window.fromMs) : [];
+    // FR-2: явный период не вычитает отправленное ранее — повтор даёт тот же набор.
+    const consumed = explicit ? { urls: new Set(), titles: new Set() } : await store.consumedKeys(chatId);
     // Мало времени — режем вход и выход, но сводку всё равно отдаём:
     // пустой ответ хуже короткого (ревью 2026-10-19).
     const tight = left() < 20000;
@@ -162,7 +198,8 @@ async function runDigest(chatId) {
       consumedTitles: consumed.titles,
     });
     const periodFrom = isoFromMs(window.fromMs);
-    const periodTo = isoNow();
+    // Конец периода: для «за вчера» и «с A по B» — полночь дня после B, а не сейчас (FR-1).
+    const periodTo = explicit ? isoFromMs(explicit.toMs) : isoNow();
 
     if (!selected.length) {
       await status.close();
@@ -170,25 +207,51 @@ async function runDigest(chatId) {
       if (collected.errors.length) notes.push(`⚠ Не удалось собрать ${collected.errors.length} источник(ов): ${collected.errors.map((e) => escapeHtml(e.url)).join(', ')}`);
       if (unsupported.length) notes.push(`ℹ️ Не собираются: ${unsupported.map((url) => escapeHtml(url)).join(', ')}`);
       if (collected.partial.length) notes.push(`ℹ️ Собрано неполно: ${collected.partial.length} источник(ов)`);
-      await send(chatId, [EMPTY_TEXT, ...notes].join('\n\n'));
+      // FR-11: пустой явный период называет период и цифры сбора, неявный — подсказывает период.
+      const head = explicit
+        ? emptyPeriodText({ span: periodSpan(periodFrom, periodTo, tzOffsetMin), fastCount: rotated.length, deferred, errors: collected.errors.length })
+        : EMPTY_TEXT;
+      await send(chatId, [head, ...notes].join('\n\n'));
       await store.setJob(jobId, { status: 'done', stage: 'empty', detail: 'новостей нет' });
       jobDone = true;
       return;
     }
 
     await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')}…`);
-    const summary = await summarize(formatItemsInput(selected, config.digest.textCap), await store.getInterests(chatId), null, {
-      thinking: budget.thinking,
-      maxTokens: caps.maxTokens,
-      attempts: 1,
-    });
+    const interestsText = await store.getInterests(chatId);
+    let summary;
+    try {
+      summary = await summarize(formatItemsInput(selected, config.digest.textCap), interestsText, null, {
+        thinking: budget.thinking,
+        maxTokens: caps.maxTokens,
+        attempts: 1,
+      });
+    } catch (error) {
+      // Обрезка по max_tokens: вход не влез в выходной бюджет. Один повтор с половиной
+      // пунктов (и те же лимиты) дешевле, чем честная ошибка вместо сводки.
+      if (error?.name !== 'LlmTruncatedError' || left() < 12000 || selected.length < 6) throw error;
+      const half = selected.slice(0, Math.max(5, Math.floor(selected.length / 2)));
+      console.log(`LLM обрезала ответ, повтор с ${half.length} пунктами`);
+      summary = await summarize(formatItemsInput(half, config.digest.textCap), interestsText, null, {
+        thinking: budget.thinking,
+        maxTokens: caps.maxTokens,
+        attempts: 1,
+      });
+      selected.splice(half.length);
+    }
+    // FR-3: если набор совпал с прошлой сводкой — честная пометка вместо тишины.
+    const sameAs = explicit ? await previousDigestAt(chatId, selected) : null;
     const text = composeDigest({
-      header: periodHeader(periodFrom, periodTo, config.tz.offsetMin),
+      header: periodHeader(periodFrom, periodTo, tzOffsetMin),
       summary,
       capped: window.capped,
+      sameAs,
+      tzOffsetMin,
       errors: collected.errors,
       partial: collected.partial.map((p) => p.url),
       unsupported,
+      deferred,
+      shortHistory,
     });
 
     await status.set('✍️ Пишу сообщения…');
@@ -202,7 +265,7 @@ async function runDigest(chatId) {
       sentChunks = sent;
       if (sent === 1) await status.close();
     }
-    await store.recordDigest(chatId, { periodFrom, periodTo, text, itemIds: selected.map((row) => row.id) });
+    await store.recordDigest(chatId, { periodFrom, periodTo, text, itemIds: selected.map((row) => row.id) }, { moveAnchor: !explicit });
     await store.appendHistory(chatId, 'assistant', text);
     await store.setJob(jobId, { status: 'done', stage: 'sent', detail: `${plural(selected.length, 'пункт', 'пункта', 'пунктов')}, ${plural(sent, 'сообщение', 'сообщения', 'сообщений')}` });
     jobDone = true;
@@ -288,15 +351,142 @@ async function addSourceFromInput(chatId, input) {
   await sendSources(chatId);
 }
 
-/** Уточнения по темам и свободный диалог (R3): короткий вызов, влезает в инвокацию. */
-async function answerQuestion(chatId, question) {
+/** Интересы: показ, удаление, отмена, предложение добавить (FR-5…FR-7). Сбор не запускается. */
+async function handleInterests(chatId, intent, text) {
+  if (intent.action === 'list') {
+    await sendInterests(chatId);
+    return;
+  }
+  if (intent.action === 'cancel') {
+    // U8: то же, что кнопка «❌ Отмена» — предложение снимается, кнопки после этого не работают.
+    await store.clearFsm(interestFsmKey(chatId)).catch(() => {});
+    await send(chatId, '❌ Отменено, интересы не менялись.');
+    return;
+  }
+  if (intent.action === 'remove') {
+    await removeInterestFlow(chatId, intent.target);
+    return;
+  }
+  await proposeInterests(chatId, text, intent.target);
+}
+
+async function interestsRows(chatId) {
+  const terms = parseInterests(await store.getInterests(chatId));
+  return countInterestSources(terms, await store.listSources(chatId));
+}
+
+async function sendInterests(chatId) {
+  await send(chatId, interestsListText(await interestsRows(chatId)));
+}
+
+/** Запись — только после кнопки «✅ Добавить» (FR-5, FR-10); здесь только предложение. */
+async function proposeInterests(chatId, text, target) {
+  const extracted = parseTermList(await extractTerms(text));
+  const usedFallback = !extracted.length;
+  const candidates = usedFallback ? fallbackTerms(target) : extracted;
+  if (!candidates.length) {
+    await send(chatId, '🤔 Не понял, что добавить в интересы. Пример: «добавь в интересы кобальт» или «хочу больше про физическое золото».');
+    return;
+  }
+  // FR-12: больше трёх тем, общий или слишком короткий термин — переспрос, запись не выполняется.
+  const check = clarifyTerms(candidates);
+  if (!check.ok) {
+    const lines = ['🤔 Уточни, что добавить в интересы:', ...check.problems.map((problem) => `• ${escapeHtml(problem)}`)];
+    if (check.terms.length) lines.push('', `Понял так: ${check.terms.slice(0, 5).map((term, index) => `${index + 1}) ${escapeHtml(term)}`).join(' ')}.`);
+    lines.push('', 'Ничего не записал — скажи конкретнее.');
+    await send(chatId, lines.join('\n'));
+    return;
+  }
+  // Сухая примерка профиля: лимит 4000 и дедуп видит пользователь до записи.
+  const preview = addInterestTerms(await store.getInterests(chatId), check.terms);
+  if (!preview.ok) {
+    await send(chatId, `⚠️ ${escapeHtml(preview.reason)}`);
+    return;
+  }
+  if (!preview.added.length) {
+    // Интерес уже в профиле: заводим недостающие источники — иначе тема есть в промпте,
+    // но её новости никогда не собираются (пользователь просил именно «собрать источники»).
+    const config = await loadConfig();
+    const created = await store.addInterestSources(chatId, preview.existing, config.sources.max);
+    const tail = created ? ` Источников завёл: ${created}.` : ' Источники по теме уже есть — смотри /sources.';
+    await send(chatId, `ℹ️ Уже в интересах: ${preview.existing.map((term) => escapeHtml(term)).join(', ')}.${tail}`);
+    return;
+  }
+  await store.setFsm(interestFsmKey(chatId), 'await_interest', { mode: 'add', terms: preview.added });
+  const list = preview.added.map((term, index) => `${index + 1}) ${escapeHtml(term)}`).join('\n');
+  const note = usedFallback ? '\n\n<i>LLM недоступна, взял формулировку как есть.</i>' : '';
+  await botApi('sendMessage', {
+    chat_id: chatId,
+    text: `Добавить в интересы:\n${list}${note}\n\nИсточники: Google News по каждому.`,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: [[{ text: '✅ Добавить', callback_data: 'int:add' }, { text: '❌ Отмена', callback_data: 'int:cancel' }]] },
+  }).catch((error) => console.error('proposeInterests:', error?.message ?? error));
+}
+
+/** Удаление: 0 совпадений — отказ со списком, >1 — кнопки (FR-6). */
+async function removeInterestFlow(chatId, target) {
+  const matches = matchInterestTerms(await store.getInterests(chatId), target);
+  if (!matches.length) {
+    await send(chatId, [`ℹ️ Такого интереса нет: ${escapeHtml(target || '—')}.`, '', interestsListText(await interestsRows(chatId))].join('\n'));
+    return;
+  }
+  if (matches.length > 1) {
+    const terms = matches.slice(0, 5);
+    await store.setFsm(interestFsmKey(chatId), 'await_interest', { mode: 'remove', terms });
+    await botApi('sendMessage', {
+      chat_id: chatId,
+      text: 'Уточни, что убрать:',
+      reply_markup: { inline_keyboard: terms.map((term, index) => [{ text: term.slice(0, 40), callback_data: `int:pick:${index}` }]) },
+    }).catch((error) => console.error('removeInterest:', error?.message ?? error));
+    return;
+  }
+  // Фраза пользователя, а не строка профиля: убирается термин, а источники ищутся по нему (FR-6).
+  await dropInterest(chatId, target);
+}
+
+/** Убирает интерес и его источники; снимок в fsm — для кнопки «↩️ Вернуть» (FR-6). */
+async function dropInterest(chatId, term) {
+  const snapshot = await store.removeInterest(chatId, term);
+  if (!snapshot) {
+    await send(chatId, `ℹ️ Такого интереса нет: ${escapeHtml(term)}.`);
+    return null;
+  }
+  await store.setFsm(interestFsmKey(chatId), 'await_undo', { term: snapshot.term, profile: snapshot.profile, sources: snapshot.sources });
+  await botApi('sendMessage', {
+    chat_id: chatId,
+    text: `🗑 Убрал: ${escapeHtml(snapshot.term)} (источников удалено: ${snapshot.removedSources})`,
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    reply_markup: { inline_keyboard: [[{ text: '↩️ Вернуть', callback_data: 'int:undo' }]] },
+  }).catch((error) => console.error('dropInterest:', error?.message ?? error));
+  return snapshot;
+}
+
+/** Время прошлой сводки, если её набор пунктов совпадает с текущим (FR-3). */
+async function previousDigestAt(chatId, selected) {
+  const lastIds = await store.lastDigestItemIds(chatId);
+  if (!lastIds.length || lastIds.length !== selected.length) return null;
+  const ids = new Set(lastIds);
+  if (!selected.every((row) => ids.has(row.id))) return null;
+  return (await store.lastDigest(chatId))?.createdAt ?? null;
+}
+
+/** Уточнения по темам и свободный диалог (R3): короткий вызов, влезает в инвокацию.
+ * Период из фразы уходит в окно контекста (FR-4): «сводка по золоту за неделю» — не 24 часа. */
+async function answerQuestion(chatId, question, periodHint = null) {
   const config = await loadConfig();
-  const window = digestWindow({
-    nowMs: Date.now(),
-    lastSentAt: null,
-    windowDays: config.digest.windowDays,
-    firstWindowHours: config.digest.firstWindowHours,
-  });
+  const explicit = periodHint
+    ? parsePeriod(periodHint, { nowMs: Date.now(), tzOffsetMin: await store.getTzOffsetMin(chatId), maxDays: config.digest.windowDays })
+    : null;
+  const window = explicit && !explicit.invalid && !explicit.future
+    ? { fromMs: explicit.fromMs, toMs: explicit.toMs, capped: explicit.capped }
+    : digestWindow({
+      nowMs: Date.now(),
+      lastSentAt: null,
+      windowDays: config.digest.windowDays,
+      firstWindowHours: config.digest.firstWindowHours,
+    });
   const rows = await store.recentItems(chatId, window.fromMs, 40);
   const last = await store.lastDigest(chatId);
   const feed = rows

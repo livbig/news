@@ -1,6 +1,7 @@
 // Диагностика: жив ли Bot API для нашего токена и что лежит в БД.
 import { botApi } from '../lib/telegram.js';
-import { latestJob, listActiveSources } from '../lib/store.js';
+import { getFsm, getInterests, latestJob, listActiveSources } from '../lib/store.js';
+import { interestFsmKey } from '../lib/interests.js';
 import { fetch } from 'sdk';
 import { parseHtmlList } from '../lib/html.js';
 
@@ -27,6 +28,10 @@ export default async function health(input = {}) {
     // id и url нужны для адресных операций (удаление/выключение) без доступа к БД
     list: list.map((row) => ({ id: row.id, kind: row.kind, url: row.url, enabled: row.enabled })),
     job: chatId ? await latestJob(chatId) : null,
+    // Диагностика интересов: профиль и отложенное предложение живут в БД, без них
+    // не понять, почему кнопка «Добавить» ответила «уже добавлено».
+    interestsText: chatId ? await getInterests(chatId) : null,
+    fsm: chatId ? await getFsm(interestFsmKey(chatId)) : null,
     probe,
   });
 }
