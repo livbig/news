@@ -2,7 +2,7 @@
 // Возвращает JSON-СТРОКУ: CLI печатает `< "..."`, воркер парсит один раз.
 import { digestWindow, formatItemsInput, selectPending } from '../lib/digest.js';
 import { loadConfig } from '../lib/config.js';
-import { consumedKeys, getInterests, getLastSentAt, pendingRows, setJob } from '../lib/store.js';
+import { consumedKeys, getInterests, getLastSentAt, listActiveSources, pendingRows, setJob } from '../lib/store.js';
 import { isoFromMs, isoNow } from '../lib/text.js';
 
 export default async function select(input = {}) {
@@ -25,6 +25,8 @@ export default async function select(input = {}) {
     consumedUrls: consumed.urls,
     consumedTitles: consumed.titles,
   });
+  const all = await listActiveSources(chatId);
+  const unsupported = all.filter((row) => row.kind === 'html').map((row) => row.url);
   if (input.jobId) await setJob(Number(input.jobId), { stage: 'selected', detail: `${selected.length} пунктов` });
   return JSON.stringify({
     count: selected.length,
@@ -34,5 +36,6 @@ export default async function select(input = {}) {
     periodFrom: isoFromMs(window.fromMs),
     periodTo: isoNow(),
     capped: window.capped,
+    unsupported,
   });
 }

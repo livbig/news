@@ -159,7 +159,7 @@ try {
     capped: picked.capped,
     errors: collected.errors,
     partial: collected.partial,
-    unsupported: collected.unsupported,
+    unsupported: picked.unsupported ?? collected.unsupported,
   });
 
   if (statusId) {
