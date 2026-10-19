@@ -89,12 +89,12 @@ try {
   statusId = await status('🔎 Собираю ленту…');
   // Две партии: rss (быстро) и tgweb (через зеркало, до 12 с на канал) — каждая в своём вызове.
   const rss = run('endpoints/collect', { chatId, jobId, kind: 'rss' });
-  const tg = run('endpoints/collect', { chatId, kind: 'tgweb' });
+  const channels = run('endpoints/collect', { chatId, kind: 'tgweb' });
   const collected = {
-    sources: rss.sources + tg.sources,
-    added: rss.added + tg.added,
-    errors: [...rss.errors, ...tg.errors],
-    partial: [...rss.partial, ...tg.partial],
+    sources: rss.sources + channels.sources,
+    added: rss.added + channels.added,
+    errors: [...rss.errors, ...channels.errors],
+    partial: [...rss.partial, ...channels.partial],
   };
   log('сбор:', JSON.stringify(collected));
 
