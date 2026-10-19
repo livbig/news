@@ -51,9 +51,15 @@ function run(module, payload) {
     const detail = raw.split(String.fromCharCode(10)).slice(-6).join(' | ');
     throw new Error(`${module} не выполнился: ${detail.slice(0, 600)}`);
   }
-  const line = out.split('\n').reverse().find((l) => l.startsWith('< '));
+  const line = out
+    .split('\n')
+    .reverse()
+    .find((l) => l.startsWith('< '));
   if (!line) throw new Error(`${module}: нет ответа от платформы\n${out.slice(-800)}`);
-  return JSON.parse(JSON.parse(line.slice(2)));
+  // CLI печатает `< <значение>  1234ms` — срезаем хвост с временем перед разбором.
+  const value = line.slice(2).replace(/\s+\d+(?:\.\d+)?(?:ms|s)$/, '').trim();
+  if (value === 'undefined') throw new Error(`${module}: платформа вернула undefined`);
+  return JSON.parse(JSON.parse(value));
 }
 
 const config = {
