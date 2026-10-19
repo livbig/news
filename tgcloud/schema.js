@@ -110,6 +110,24 @@ export const fsm = table('fsm', {
   updatedAt: text('updated_at').notNull(),
 });
 
+// Задачи сводки: тяжёлый LLM живёт вне платформы (лимит вызова 30 с, замер iter-25),
+// поэтому состояние задачи хранится здесь и переживает инвокации.
+export const jobs = table(
+  'jobs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    chatId: integer('chat_id').notNull(),
+    status: text('status').notNull().default('queued'), // queued|running|done|failed
+    stage: text('stage'),
+    detail: text('detail'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => ({
+    chatIdx: index('idx_jobs_chat').on(t.chatId, t.id),
+  }),
+);
+
 // Надгробия удалённых по retention пунктов: повторная вставка отбивается (D47).
 export const seenHashes = table(
   'seen_hashes',

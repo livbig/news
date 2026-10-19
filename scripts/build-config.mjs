@@ -32,6 +32,10 @@ const secrets = {
   llmApiKey: env.LLM_API_KEY ?? '',
   llmBaseUrl: env.LLM_BASE_URL ?? '',
   llmModel: env.LLM_MODEL ?? '',
+  // Воркер сводки: токен с правом actions:write на репозиторий + сам репозиторий.
+  githubToken: env.GITHUB_DISPATCH_TOKEN ?? '',
+  githubRepo: env.GITHUB_REPO ?? '',
+  githubRef: env.GITHUB_REF ?? 'main',
 };
 
 const body = `// СГЕНЕРИРОВАНО scripts/build-config.mjs из .env — в git не попадает, править руками нельзя.

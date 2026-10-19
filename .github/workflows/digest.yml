@@ -1,0 +1,34 @@
+# Воркер сводки: запускается кнопкой из бота (workflow_dispatch), не по расписанию.
+# Причина: мега-вызов effort=max идёт ~264 с, а инвокация платформы живёт 30 с
+# (docs/tgcloud-migration.md §9). Здесь нет лимитов, поэтому качество не режем.
+name: digest
+
+on:
+  workflow_dispatch:
+    inputs:
+      chat_id:
+        description: 'Telegram chat_id получателя'
+        required: true
+      job_id:
+        description: 'Идентификатор задачи в БД платформы'
+        required: true
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Собрать и отправить сводку
+        run: node scripts/worker.mjs
+        env:
+          CHAT_ID: ${{ inputs.chat_id }}
+          JOB_ID: ${{ inputs.job_id }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}

@@ -24,6 +24,13 @@ export async function loadConfig() {
       baseUrl: secret.llmBaseUrl ?? SETTINGS.llm.baseUrl,
       model: secret.llmModel ?? SETTINGS.llm.model,
     },
+    github: {
+      token: secret.githubToken ?? '',
+      repo: secret.githubRepo ?? '',
+      workflow: SETTINGS.worker.workflow,
+      ref: secret.githubRef ?? 'main',
+    },
+    worker: SETTINGS.worker,
     digest: SETTINGS.digest,
     collect: SETTINGS.collect,
     retention: SETTINGS.retention,

@@ -1,26 +1,16 @@
-// Единая точка входа бота: гейт → интент → работа с видимым прогрессом (R1/R2/R3).
-// Сводка собирается по запросу: сбор и LLM идут в одном вызове, пользователь видит
-// шаги «собираю → думаю → пишу», чтобы не гадать, завис ли бот.
+// Единая точка входа бота: гейт → интент → действие.
+// Сводка выполняется воркером (GitHub Actions): мега-вызов effort=max идёт 264 с,
+// а инвокация платформы живёт 30 с (замер 2026-10-19, docs/tgcloud-migration.md §9).
+// Здесь — мгновенные шаги: задача в БД, запуск воркера, ответ пользователю.
 
-import { api } from 'sdk';
+import { api, fetch } from 'sdk';
 import { gate, loadConfig } from '../lib/config.js';
 import { route } from '../lib/intents.js';
-import { collectAll } from '../lib/collect.js';
-import {
-  EMPTY_TEXT,
-  coverageNote,
-  degradedFooter,
-  digestWindow,
-  formatItemsInput,
-  periodHeader,
-  selectPending,
-} from '../lib/digest.js';
-import { LlmError, ask, summarize } from '../lib/llm.js';
+import { digestWindow } from '../lib/digest.js';
+import { LlmError, ask } from '../lib/llm.js';
 import * as store from '../lib/store.js';
-import { chunkMessage, escapeHtml, isoFromMs, isoNow, plural } from '../lib/text.js';
+import { chunkMessage, escapeHtml } from '../lib/text.js';
 import { helpText, settingsText, sourcesText, statsText } from '../lib/render.js';
-
-const THROTTLE_MS = 1200;
 
 export default async function onMessage(message) {
   const chatId = message?.chat?.id;
@@ -37,7 +27,7 @@ export default async function onMessage(message) {
       return;
     }
     if (intent.kind === 'digest') {
-      await sendDigest(chatId);
+      await dispatchDigest(chatId);
       return;
     }
     await answerQuestion(chatId, text);
@@ -48,110 +38,72 @@ export default async function onMessage(message) {
 }
 
 async function handleCommand(chatId, { command }) {
-  if (command === 'digest' || command === 'start') {
-    if (command === 'start') {
-      const config = await loadConfig();
-      const interests = await store.getInterests(chatId);
-      const hint = interests
-        ? 'Напиши «сводка» (или просто «ну как там») — соберу новости с прошлой сводки.'
-        : 'Напиши «сводка» — соберу новости с прошлой сводки. Позже добавим интервью о твоих интересах.';
-      await send(chatId, `🧿 <b>Агрегатор</b>\n\n${hint}`);
-      await send(chatId, helpText(config.sources.max));
-      return;
-    }
-    await sendDigest(chatId);
+  const config = await loadConfig();
+  if (command === 'start') {
+    const interests = await store.getInterests(chatId);
+    const hint = interests
+      ? 'Напиши «сводка» (или просто «ну как там») — соберу новости с прошлой сводки.'
+      : 'Напиши «сводка» — соберу новости с прошлой сводки (не больше 7 дней).';
+    await send(chatId, `🧿 <b>Агрегатор</b>\n\n${hint}`);
+    await send(chatId, helpText(config.sources.max));
+    return;
+  }
+  if (command === 'digest') {
+    await dispatchDigest(chatId);
     return;
   }
   if (command === 'stats') {
     const data = await store.stats(chatId);
-    await send(chatId, statsText(data));
+    const job = await store.latestJob(chatId);
+    const tail = job ? `\nПоследняя задача: ${job.status} (${job.stage ?? '—'}${job.detail ? `, ${job.detail}` : ''})` : '';
+    await send(chatId, `${statsText(data)}${tail}`);
     return;
   }
   if (command === 'sources') {
-    const list = await store.listSources(chatId);
-    await send(chatId, sourcesText(list));
+    await send(chatId, sourcesText(await store.listSources(chatId)));
     return;
   }
-  if (command === 'settings' || command === 'help' || command === 'stop') {
-    const config = await loadConfig();
-    await send(chatId, command === 'help' ? helpText(config.sources.max) : settingsText());
-  }
+  await send(chatId, command === 'help' ? helpText(config.sources.max) : settingsText());
 }
 
-async function sendDigest(chatId) {
+/** Задача в БД + запуск воркера. Пользователь сразу видит, что работа пошла. */
+async function dispatchDigest(chatId) {
   const config = await loadConfig();
-  const started = Date.now();
-  const status = await statusHandle(chatId, '🔎 Собираю ленту…');
-  await typing(chatId);
-
-  const sources = await store.listActiveSources(chatId);
-  await status.set(`🔎 Собираю ${plural(sources.length, 'источник', 'источника', 'источников')}…`);
-  const collected = await collectAll(sources);
-
-  const lastSentAt = await store.getLastSentAt(chatId);
-  const window = digestWindow({
-    nowMs: Date.now(),
-    lastSentAt,
-    windowDays: config.digest.windowDays,
-    firstWindowHours: config.digest.firstWindowHours,
-  });
-  const rows = await store.pendingRows(chatId, window.fromMs);
-  const consumed = await store.consumedKeys(chatId);
-  const { selected } = selectPending(rows, {
-    perSource: config.digest.perSource,
-    maxItems: config.digest.maxItems,
-    maxChars: config.digest.maxChars,
-    consumedUrls: consumed.urls,
-    consumedTitles: consumed.titles,
-  });
-  const periodFrom = isoFromMs(window.fromMs);
-  const periodTo = isoNow();
-
-  if (!selected.length) {
-    await status.close();
-    const note = coverageNote({ capped: window.capped, missingSources: collected.partial });
-    await send(chatId, `${EMPTY_TEXT}${note}${degradedFooter(collected.errors)}`);
+  const jobId = await store.createJob(chatId);
+  if (!config.github.token || !config.github.repo) {
+    await store.setJob(jobId, { status: 'failed', stage: 'dispatch', detail: 'нет GITHUB_DISPATCH_TOKEN/GITHUB_REPO' });
+    await send(chatId, '⚠️ Воркер не настроен (нет GITHUB_DISPATCH_TOKEN и GITHUB_REPO). Сводка не запущена.');
     return;
   }
-
-  await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')} из ${plural(sources.length, 'источника', 'источников', 'источников')}… (это может занять несколько минут)`);
-  await typing(chatId);
-
-  let summary;
+  let response;
   try {
-    summary = await summarize(formatItemsInput(selected, config.digest.textCap), await store.getInterests(chatId), (progress) => {
-      status.set(`🧠 Думаю над сводкой… уже ${Math.round(progress.chars / 100) / 10} тыс. символов`);
+    response = await fetch(`https://api.github.com/repos/${config.github.repo}/actions/workflows/${config.github.workflow}/dispatches`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.github.token}`,
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ ref: config.github.ref, inputs: { chat_id: String(chatId), job_id: String(jobId) } }),
     });
   } catch (error) {
-    await status.close();
-    const reason = error instanceof LlmError ? error.message : String(error?.message ?? error);
-    await send(chatId, `⚠️ Сводка не удалась: ${escapeHtml(reason).slice(0, 400)}\n\nПопробуй ещё раз — новости никуда не денутся.`);
+    await store.setJob(jobId, { status: 'failed', stage: 'dispatch', detail: `сеть: ${String(error?.message ?? error).slice(0, 120)}` });
+    await send(chatId, '⚠️ Не смог запустить воркер: сеть недоступна. Попробуй ещё раз.');
     return;
   }
-
-  const header = periodHeader(periodFrom, periodTo, config.tz.offsetMin);
-  const note = coverageNote({
-    capped: window.capped,
-    missingSources: collected.partial,
-  });
-  const full = `${header}\n\n${summary}${note}${degradedFooter(collected.errors)}`;
-  const chunks = chunkMessage(full, config.digest.messageLimit);
-  await status.set('✍️ Пишу сообщения…');
-  for (let i = 0; i < chunks.length; i += 1) {
-    await send(chatId, chunks[i]);
-    if (i === 0) await status.close(); // первый кусок уже пришёл — статус больше не нужен
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    console.error(`dispatch ${response.status}: ${body.slice(0, 200)}`);
+    await store.setJob(jobId, { status: 'failed', stage: 'dispatch', detail: `GitHub ${response.status}` });
+    await send(chatId, `⚠️ GitHub не принял запуск (${response.status}). Проверь токен и workflow.`);
+    return;
   }
-  await store.recordDigest(chatId, {
-    periodFrom,
-    periodTo,
-    text: full,
-    itemIds: selected.map((row) => row.id),
-  });
-  await store.appendHistory(chatId, 'assistant', full);
-  console.log(`сводка: ${selected.length} пунктов, ${collected.added} новых, ${Math.round((Date.now() - started) / 1000)} c`);
+  await store.setJob(jobId, { status: 'running', stage: 'dispatched', detail: `job ${jobId}` });
+  await send(chatId, `🔎 Запустил сбор и анализ (задача ${jobId}). Обычно ${config.worker.eta} — прогресс увидишь сообщением ниже, сводку пришлю сюда.`);
 }
 
-/** Уточнения по темам и свободный диалог (R3): контекст — накопленная лента за окно. */
+/** Уточнения по темам и свободный диалог (R3): короткий вызов, влезает в инвокацию. */
 async function answerQuestion(chatId, question) {
   const config = await loadConfig();
   const window = digestWindow({
@@ -187,12 +139,7 @@ async function answerQuestion(chatId, question) {
 
 async function send(chatId, text) {
   await api
-    .sendMessage({
-      chat_id: chatId,
-      text,
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-    })
+    .sendMessage({ chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
     .catch((error) => console.error('sendMessage:', error?.message ?? error));
 }
 
@@ -202,16 +149,14 @@ async function typing(chatId) {
 
 /** Сообщение-статус, которое дописывается по ходу работы (троттл ~1 запрос/сек). */
 async function statusHandle(chatId, initial) {
-  const message = await api
-    .sendMessage({ chat_id: chatId, text: initial, disable_notification: true })
-    .catch(() => null);
+  const message = await api.sendMessage({ chat_id: chatId, text: initial, disable_notification: true }).catch(() => null);
   const messageId = message?.message_id;
   let lastSent = Date.now();
   let lastText = initial;
   return {
     async set(text) {
       if (!messageId || text === lastText) return;
-      if (Date.now() - lastSent < THROTTLE_MS) return;
+      if (Date.now() - lastSent < 1200) return;
       lastSent = Date.now();
       lastText = text;
       await api.editMessageText({ chat_id: chatId, message_id: messageId, text }).catch(() => {});

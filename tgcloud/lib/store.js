@@ -4,7 +4,7 @@
 
 import { db } from 'sdk';
 import { and, asc, desc, eq, gte, inArray, lt } from 'sdk/db';
-import { chatHistory, digestItems, digests, fsm, items, seenHashes, sources, users } from '../schema.js';
+import { chatHistory, digestItems, digests, fsm, items, jobs, seenHashes, sources, users } from '../schema.js';
 import { isoFromMs, isoNow, normalizeTitle, urlHash } from './text.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,6 +24,14 @@ export async function getInterests(chatId) {
 export async function getLastSentAt(chatId) {
   const row = await db.select({ lastSentAt: users.lastSentAt }).from(users).where(eq(users.chatId, chatId)).get();
   return row?.lastSentAt ?? null;
+}
+
+/** Профиль интересов переносим только если на платформе его ещё нет. */
+export async function setInterestsIfEmpty(chatId, text) {
+  const current = await getInterests(chatId);
+  if (current?.trim()) return false;
+  await db.update(users).set({ interestsText: String(text).slice(0, 4000) }).where(eq(users.chatId, chatId)).run();
+  return true;
 }
 
 export async function markOnboarded(chatId) {
@@ -239,6 +247,26 @@ export async function retentionPass(chatId, { itemsDays = 10, days = 30 } = {}) 
   }
   await db.delete(chatHistory).where(and(eq(chatHistory.chatId, chatId), lt(chatHistory.createdAt, floor))).run();
   return { itemsRemoved: removed };
+}
+
+// --- задачи сводки (тяжёлый LLM вне платформы) ------------------------------------
+
+export async function createJob(chatId) {
+  const inserted = await db
+    .insert(jobs)
+    .values({ chatId, status: 'queued', stage: 'created', createdAt: isoNow(), updatedAt: isoNow() })
+    .returning()
+    .run();
+  return inserted?.[0]?.id ?? null;
+}
+
+export const setJob = (id, patch) =>
+  db.update(jobs).set({ ...patch, updatedAt: isoNow() }).where(eq(jobs.id, id)).run();
+
+export const getJob = (id) => db.select().from(jobs).where(eq(jobs.id, id)).get();
+
+export async function latestJob(chatId) {
+  return db.select().from(jobs).where(eq(jobs.chatId, chatId)).orderBy(desc(jobs.id)).limit(1).get();
 }
 
 // --- диалог и FSM ----------------------------------------------------------------
