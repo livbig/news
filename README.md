@@ -8,8 +8,7 @@ Telegram-бот персональных новостных сводок: RSS/TG
 
 Прод: Raspberry Pi OS (aarch64), systemd-юниты `awg0.service` (AmneziaWG
 full-tunnel + kill-switch) и `newsbot.service` (`Restart=always`, пользователю
-`minibrick`, каталог `/home/minibrick/news`). Обновление кода — rsync с Mac:
-`rsync -a --exclude='__pycache__' -e ssh bot pipeline requirements.txt .env minibrick@<pi>:news/`.
+Raspberry Pi в локальной сети (код обновляется rsync-ом в каталог `news/`, `.env` живёт только на устройстве).
 
 Конфигурация — переменные окружения (`.env` в корне кода, читается автоматически;
 см. `.env.example`): `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `LLM_API_KEY`,

@@ -25,7 +25,7 @@ test('вопросы по темам и свободный текст уходя
 
 test('команды распознаются, мусор — нет', () => {
   assert.deepEqual(route('/digest').kind, 'command');
-  assert.equal(route('/digest@cumulativenewsbot').command, 'digest');
+  assert.equal(route('/digest@examplebot').command, 'digest');
   assert.equal(route('/sources').command, 'sources');
   assert.equal(route('/unknown').kind, 'ask');
 });
