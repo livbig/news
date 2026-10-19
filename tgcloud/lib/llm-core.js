@@ -148,7 +148,13 @@ async function call({ http, config, system, messages, maxTokens, thinking = true
  * @param {string|null} interests профиль читателя (users.interests_text)
  * @param {(p:{chars:number,elapsedMs:number})=>void} [onProgress] живость «думаю…»
  */
-async function summarizeWith({ http, config, itemsText, interests, onProgress }) {
+const EFFORT_LADDER = ['max', 'high', 'medium', 'low'];
+function lowerEffort(effort) {
+  const index = EFFORT_LADDER.indexOf(effort);
+  return EFFORT_LADDER[Math.min(index + 1, EFFORT_LADDER.length - 1)] ?? 'low';
+}
+
+async function summarizeWith({ http, config, itemsText, interests, onProgress, effort: forcedEffort = null, maxTokens = null, thinking = null }) {
   if (!config.llm.apiKey) {
     console.warn('LLM_API_KEY не задан — mock-сводка (dev)');
     return `${MOCK_NOTE}\n\n${itemsText.slice(0, 1500)}`;
@@ -156,7 +162,8 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress })
   const messages = [{ role: 'user', content: itemsText }];
   let lastError = null;
   for (let attempt = 1; attempt <= config.llm.attempts; attempt += 1) {
-    const effort = lastError instanceof LlmTruncatedError ? 'high' : null;
+    // Обрезка по max_tokens: повтор с тем же усилием бесполезен (iter-20) — снижаем на шаг.
+    const effort = lastError instanceof LlmTruncatedError ? lowerEffort(forcedEffort ?? config.llm.effort) : forcedEffort;
     try {
       if (effort) console.warn(`LLM: повтор с effort=${effort} после обрезки`);
       const text = await call({
@@ -164,8 +171,8 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress })
         config,
         system: digestPrompt(interests),
         messages,
-        maxTokens: config.llm.maxTokens,
-        thinking: true,
+        maxTokens: maxTokens ?? config.llm.maxTokens,
+        thinking: thinking ?? true,
         effort,
         onProgress,
       });

@@ -12,7 +12,8 @@ import { insertItem, setSourceStatus } from './store.js';
  * @param {{id:number, kind:string, url:string}[]} sources
  * @returns {Promise<{added:number, errors:{url:string,error:string}[], partial:{url:string,reason:string}[]}>}
  */
-export async function collectAll(sources) {
+export async function collectAll(sources, { deadlineMs = 0 } = {}) {
+  const deadline = deadlineMs ? Date.now() + deadlineMs : 0;
   const config = await loadConfig();
   const errors = [];
   const partial = [];
@@ -28,6 +29,10 @@ export async function collectAll(sources) {
       for (;;) {
         const source = queue.shift();
         if (!source) return;
+        if (deadline && Date.now() > deadline) {
+          partial.push({ url: source.url, reason: 'не собрано: не хватило времени вызова' });
+          continue;
+        }
         try {
           const result = await collectOne(source, config);
           added += result.added;

@@ -7,9 +7,9 @@ import { askWith, summarizeWith } from './llm-core.js';
 
 export { LlmError, LlmTruncatedError, collectSseEvents, reduceSse } from './llm-core.js';
 
-export async function summarize(itemsText, interests, onProgress) {
+export async function summarize(itemsText, interests, onProgress, options = {}) {
   const config = await loadConfig();
-  return summarizeWith({ http: fetch, config, itemsText, interests, onProgress });
+  return summarizeWith({ http: fetch, config, itemsText, interests, onProgress, ...options });
 }
 
 export async function ask({ question, context, history = [] }) {
