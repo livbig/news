@@ -35,3 +35,4 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TGCLOUD_TOKEN: ${{ secrets.TGCLOUD_TOKEN }}
           POLL_BUDGET_MS: '270000'
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}

@@ -79,3 +79,18 @@ while (Date.now() < deadline) {
   }
 }
 log('выход по бюджету, обработано', handled);
+
+// Самопродолжение: расписание GitHub (cron) на публичных репозиториях с частым
+// force-push то срабатывает, то нет — поэтому каждый прогон запускает следующий.
+if (process.env.POLL_CHAIN !== '0' && process.env.DISPATCH_TOKEN) {
+  const response = await fetch('https://api.github.com/repos/livbig/news/actions/workflows/poll.yml/dispatches', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${process.env.DISPATCH_TOKEN}`,
+      accept: 'application/vnd.github+json',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ ref: 'main' }),
+  });
+  log('следующий прогон поллера:', response.status === 204 ? 'запущен' : `GitHub ${response.status}`);
+}
