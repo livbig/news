@@ -56,10 +56,18 @@ function run(module, payload) {
     .reverse()
     .find((l) => l.startsWith('< '));
   if (!line) throw new Error(`${module}: нет ответа от платформы\n${out.slice(-800)}`);
-  // CLI печатает `< <значение>  1234ms` — срезаем хвост с временем перед разбором.
+  // CLI печатает `< <значение>  1234ms`: значение уже JSON-объект (он разбирает нашу
+  // JSON-строку и печатает результат), поэтому парсим один раз и разворачиваем строку.
   const value = line.slice(2).replace(/\s+\d+(?:\.\d+)?(?:ms|s)$/, '').trim();
   if (value === 'undefined') throw new Error(`${module}: платформа вернула undefined`);
-  return JSON.parse(JSON.parse(value));
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`${module}: ответ не JSON (${error.message}): ${value.slice(0, 300)}`);
+  }
+  if (typeof parsed !== 'string') return parsed;
+  return JSON.parse(parsed);
 }
 
 const config = {
