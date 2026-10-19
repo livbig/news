@@ -3,7 +3,8 @@
 // а инвокация платформы живёт 30 с (замер 2026-10-19, docs/tgcloud-migration.md §9).
 // Здесь — мгновенные шаги: задача в БД, запуск воркера, ответ пользователю.
 
-import { api, fetch } from 'sdk';
+import { fetch } from 'sdk';
+import { botApi } from '../lib/telegram.js';
 import { gate, loadConfig } from '../lib/config.js';
 import { route } from '../lib/intents.js';
 import { digestWindow } from '../lib/digest.js';
@@ -138,18 +139,17 @@ async function answerQuestion(chatId, question) {
 }
 
 async function send(chatId, text) {
-  await api
-    .sendMessage({ chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
+  await botApi('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
     .catch((error) => console.error('sendMessage:', error?.message ?? error));
 }
 
 async function typing(chatId) {
-  await api.sendChatAction({ chat_id: chatId, action: 'typing' }).catch(() => {});
+  await botApi('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => {});
 }
 
 /** Сообщение-статус, которое дописывается по ходу работы (троттл ~1 запрос/сек). */
 async function statusHandle(chatId, initial) {
-  const message = await api.sendMessage({ chat_id: chatId, text: initial, disable_notification: true }).catch(() => null);
+  const message = await botApi('sendMessage', { chat_id: chatId, text: initial, disable_notification: true }).catch(() => null);
   const messageId = message?.message_id;
   let lastSent = Date.now();
   let lastText = initial;
@@ -159,11 +159,11 @@ async function statusHandle(chatId, initial) {
       if (Date.now() - lastSent < 1200) return;
       lastSent = Date.now();
       lastText = text;
-      await api.editMessageText({ chat_id: chatId, message_id: messageId, text }).catch(() => {});
+      await botApi('editMessageText', { chat_id: chatId, message_id: messageId, text }).catch(() => {});
     },
     async close() {
       if (!messageId) return;
-      await api.deleteMessage({ chat_id: chatId, message_id: messageId }).catch(() => {});
+      await botApi('deleteMessage', { chat_id: chatId, message_id: messageId }).catch(() => {});
     },
   };
 }

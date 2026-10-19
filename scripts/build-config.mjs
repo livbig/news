@@ -29,12 +29,14 @@ function parseEnv(text) {
 const fromFile = parseEnv(await readFile(envPath, 'utf8').catch(() => ''));
 // CI (воркер): .env нет, значения приходят переменными окружения — они приоритетнее.
 const fromEnv = Object.fromEntries(
-  ['TELEGRAM_CHAT_ID', 'CHAT_ID', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL', 'GITHUB_REPO', 'GITHUB_DISPATCH_TOKEN', 'GITHUB_REF']
+  ['TELEGRAM_TOKEN', 'BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CHAT_ID', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL', 'GITHUB_REPO', 'GITHUB_DISPATCH_TOKEN', 'GITHUB_REF']
     .filter((key) => process.env[key])
     .map((key) => [key, process.env[key]]),
 );
 const env = { ...fromFile, ...fromEnv };
 const secrets = {
+  // Токен бота нужен рантайму для прямых вызовов Bot API (lib/telegram.js).
+  botToken: env.TELEGRAM_TOKEN ?? env.BOT_TOKEN ?? '',
   allowedChatId: Number(env.TELEGRAM_CHAT_ID ?? env.CHAT_ID) || null,
   llmApiKey: env.LLM_API_KEY ?? '',
   llmBaseUrl: env.LLM_BASE_URL ?? '',

@@ -17,6 +17,7 @@ export async function loadConfig() {
   const secret = SECRETS ?? {};
   if (!secret.llmApiKey) console.warn('LLM_API_KEY пуст: сводка уйдёт в mock-режим (NFR-05)');
   cached = {
+    botToken: secret.botToken ?? '',
     allowedChatId: Number(secret.allowedChatId) || null,
     llm: {
       ...SETTINGS.llm,

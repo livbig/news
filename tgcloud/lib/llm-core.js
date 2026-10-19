@@ -175,10 +175,31 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress })
 }
 
 /** Диалог и уточнения по темам (R3): без мышления — малый бюджет, как в проде. */
+/**
+ * История чата → сообщения anthropic. В БД строки {role, text}; модель ждёт {role, content}
+ * и чередование ролей. Ошибку поймал живой вызов 2026-10-19 («missing field content»).
+ */
+export function toMessages(history, question) {
+  const cleaned = [];
+  for (const row of history ?? []) {
+    const content = String(row?.content ?? row?.text ?? '').trim();
+    if (!content) continue;
+    const role = row?.role === 'assistant' ? 'assistant' : 'user';
+    if (cleaned.length && cleaned[cleaned.length - 1].role === role) {
+      cleaned[cleaned.length - 1].content += `\n${content}`;
+    } else {
+      cleaned.push({ role, content });
+    }
+  }
+  while (cleaned.length && cleaned[0].role === 'assistant') cleaned.shift();
+  cleaned.push({ role: 'user', content: String(question ?? '').trim() });
+  return cleaned;
+}
+
 async function askWith({ http, config, question, context, history = [] }) {
   if (!config.llm.apiKey) return `${MOCK_NOTE}\n\n(контекст: ${context.slice(0, 500)})`;
   const system = `${CHAT_SYSTEM_PROMPT}\n\nКонтекст последних статей ленты:\n${context}`;
-  const messages = [...history, { role: 'user', content: question }];
+  const messages = toMessages(history, question);
   const text = await call({
     http,
     config,
