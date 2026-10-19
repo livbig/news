@@ -31,17 +31,16 @@ function run(module, payload) {
   return line ? line.slice(2).replace(/\s+\d+(?:\.\d+)?(?:ms|s)$/, '').trim() : '';
 }
 
-const state = await tg('getUpdates', { limit: 1, offset: -1, timeout: 0 });
-let offset = state.data?.result?.[0]?.update_id;
-offset = offset ? offset + 1 : 0;
-// Смещение из БД надёжнее: локальное значение теряется между запусками.
+// Смещение берём ТОЛЬКО из БД. Раньше здесь был bootstrap через offset:-1 —
+// он сдвигал offset за последнее сообщение, и непрочитанное терялось навсегда
+// (инцидент 2026-10-19: «Сводка» пользователя так и не дошла).
+let offset = 0;
 try {
   const stored = run('endpoints/pollState', {});
   const parsed = JSON.parse(stored);
-  if (typeof parsed === 'string') offset = Math.max(offset, JSON.parse(parsed).value ?? 0);
-  else offset = Math.max(offset, parsed.value ?? 0);
+  offset = parsed.value ?? 0;
 } catch (error) {
-  log('смещение из БД не прочитано:', error.message);
+  log('смещение из БД не прочитано, начинаю с 0:', error.message);
 }
 
 log('старт, offset =', offset);
