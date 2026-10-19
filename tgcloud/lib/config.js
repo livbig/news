@@ -4,19 +4,18 @@
 // (рабочий паттерн perimetr/assistant, см. docs/tgcloud-migration.md §1).
 
 import { SETTINGS } from './settings.js';
+// СТАТИЧЕСКИЙ импорт: замер 2026-10-19 — в изоляте платформы `await import('./secrets.js')`
+// не резолвится («secrets.js не найден» при задеплоенном файле), поэтому секреты
+// подключаются только статически. secrets.js генерится `node scripts/build-config.mjs`
+// из .env и в git не попадает (.gitignore).
+import { SECRETS } from './secrets.js';
 
 let cached = null;
 
-/** Ленивая загрузка: модуль secrets.js может отсутствовать (тесты, dev) — тогда mock-режим. */
 export async function loadConfig() {
   if (cached) return cached;
-  let secret = {};
-  try {
-    // Относительный импорт с .js — обязательное правило платформы.
-    secret = (await import('./secrets.js')).SECRETS ?? {};
-  } catch {
-    console.warn('secrets.js не найден: LLM и chat_id не настроены, сводка в mock-режиме (NFR-05)');
-  }
+  const secret = SECRETS ?? {};
+  if (!secret.llmApiKey) console.warn('LLM_API_KEY пуст: сводка уйдёт в mock-режим (NFR-05)');
   cached = {
     allowedChatId: Number(secret.allowedChatId) || null,
     llm: {

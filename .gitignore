@@ -12,3 +12,4 @@ vpn.conf
 tgcloud/lib/secrets.js
 node_modules/
 .tgcloud/
+.secrets/
