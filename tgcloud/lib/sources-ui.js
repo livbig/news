@@ -9,7 +9,9 @@ export function detectSource(input) {
   const raw = String(input ?? '').trim();
   if (!raw) return { kind: null, url: '', reason: 'пусто' };
 
-  const channel = channelFromInput(raw);
+  // Голое слово — НЕ канал: «gold» не должен становиться источником-каналом.
+  const looksChannel = raw.startsWith('@') || /^https?:\/\/(t\.me|telegram\.me)\//i.test(raw);
+  const channel = looksChannel ? channelFromInput(raw) : null;
   if (channel && !/^https?:\/\//i.test(raw)) return { kind: 'tgweb', url: channel };
 
   if (/^https?:\/\//i.test(raw) || /^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(raw)) {
@@ -38,9 +40,10 @@ export function sourcesView(list, { perPage = 8 } = {}) {
     const on = Number(row.enabled) === 1;
     const mark = on ? (row.status === 'error' ? '⚠️' : '✅') : '⏸';
     const title = escapeHtml((row.title || row.url).slice(0, 60));
-    lines.push(`${mark} ${title} <i>${KIND_LABEL[row.kind] ?? row.kind}</i>${on && row.status === 'error' ? ` — ${escapeHtml(String(row.statusMsg ?? '').slice(0, 60))}` : ''}`);
+    const buttonTitle = String(row.title || row.url).slice(0, 22); // клавиатура HTML не парсит
+    lines.push(`${mark} ${title} <i>${escapeHtml(KIND_LABEL[row.kind] ?? row.kind)}</i>${on && row.status === 'error' ? ` — ${escapeHtml(String(row.statusMsg ?? '').slice(0, 60))}` : ''}`);
     keyboard.push([
-      { text: `${on ? '⏸' : '▶️'} ${title.slice(0, 22)}`, callback_data: `src:toggle:${row.id}` },
+      { text: `${on ? '⏸' : '▶️'} ${buttonTitle}`, callback_data: `src:toggle:${row.id}` },
       { text: '🗑', callback_data: `src:del:${row.id}` },
     ]);
   }

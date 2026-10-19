@@ -5,6 +5,7 @@
 import { getText, sleep } from './http.js';
 import { parseFeed, looksLikeFeed } from './rss.js';
 import { parseChannelPage } from './tgparse.js';
+import { parseHtmlList } from './html.js';
 import { loadConfig } from './config.js';
 import { insertItem, setSourceStatus } from './store.js';
 
@@ -12,9 +13,10 @@ import { insertItem, setSourceStatus } from './store.js';
  * @param {{id:number, kind:string, url:string}[]} sources
  * @returns {Promise<{added:number, errors:{url:string,error:string}[], partial:{url:string,reason:string}[]}>}
  */
-export async function collectAll(sources, { deadlineMs = 0 } = {}) {
+export async function collectAll(sources, { deadlineMs = 0, retries = null } = {}) {
   const deadline = deadlineMs ? Date.now() + deadlineMs : 0;
   const config = await loadConfig();
+  if (retries) config.collect = { ...config.collect, retries };
   const errors = [];
   const partial = [];
   let added = 0;
@@ -61,11 +63,24 @@ export async function collectAll(sources, { deadlineMs = 0 } = {}) {
 async function collectOne(source, config) {
   if (source.kind === 'tgweb') return collectChannel(source, config);
   if (source.kind === 'rss' || source.kind === 'twitter') return collectFeed(source, config);
-  if (source.kind === 'html') {
-    // HTML-источники без bs4 требуют своего разбора — следующий срез (docs/tgcloud-migration.md §2).
-    return { added: 0, partial: 'тип html пока не перенесён' };
-  }
+  if (source.kind === 'html') return collectHtmlList(source, config);
   return { added: 0 };
+}
+
+/** Страница-список без фида: пункты разбирает html.js (≤40 на источник), дедуп — в insertItem. */
+async function collectHtmlList(source, config) {
+  const page = await getText(source.url, { retries: config.collect.retries });
+  // CPU-бюджет вызова ~3 с: страницы в 1.4 МБ (Yahoo) съедают его разбором.
+  // Разбираем первые 800 КБ — списки новостей всегда в начале документа.
+  const html = page.length > 800000 ? page.slice(0, 800000) : page;
+  const entries = parseHtmlList(html, { baseUrl: source.url });
+  // Пустой список — это сбой разбора, а не «новостей нет»: иначе источник молча пропадает.
+  if (!entries.length) throw Object.assign(new Error('на странице не найдено ссылок-заголовков'), { code: 'PARSE' });
+  let added = 0;
+  for (const entry of entries) {
+    if (await insertItem(source.id, entry)) added += 1;
+  }
+  return { added };
 }
 
 async function collectFeed(source, config) {

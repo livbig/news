@@ -32,7 +32,7 @@ export const SETTINGS = {
   collect: {
     workers: 6,
     pauseMs: 400, // вежливость к t.me между страницами канала
-    maxPagesPerChannel: 6, // R6 Python-версии
+    maxPagesPerChannel: 2, // было 6 (R6): глубина нужна для догоняющих сводок, а inline-вызов ограничен 30 с
     requestTimeoutMs: 45000,
     retries: 3,
   },
@@ -47,18 +47,18 @@ export const SETTINGS = {
   // живёт ~30 с (замер iter-25), поэтому бюджет жёстко делится: сбор ≤14 с,
   // остальное — LLM с меньшим усилием и компактным входом.
   inline: {
-    collectDeadlineMs: 9000,
+    collectDeadlineMs: 5000,
     // Сколько источников трогаем за один запрос: остальные — следующим (курсор в БД).
     maxSourcesPerRun: 16,
     attempts: 1, // на повтор нет бюджета: не влезли — честная ошибка, а не зависший статус
     perSource: 4,
-    maxItems: 45,
+    maxItems: 25,
     maxChars: 45000,
     // Замер 2026-10-19 на живом входе (28 пунктов): thinking+effort=low c maxTokens 3500
     // отдаёт 0 символов (thinking съел весь бюджет, iter-18), thinking выкл. — 17 с и
     // полная сводка на 9.3k символов. Внутри 30-секундного вызова другого варианта нет.
     thinking: false,
-    maxTokens: 4000,
+    maxTokens: 3000,
     hardDeadlineMs: 27000, // запас до платформенных 30 с
   },
 };

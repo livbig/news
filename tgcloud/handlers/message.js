@@ -34,7 +34,8 @@ export default async function onMessage(message) {
     }
     // Ждём ссылку на источник, если пользователь нажал «Добавить».
     const fsm = await store.getFsm(String(chatId));
-    if (fsm?.state === 'await_source') {
+    const fsmFresh = fsm && Date.now() - Date.parse(fsm.updatedAt ?? '') < 10 * 60 * 1000;
+    if (fsmFresh && fsm.state === 'await_source') {
       await addSourceFromInput(chatId, text);
       return;
     }
@@ -86,7 +87,10 @@ async function runDigest(chatId) {
   const left = () => budget.hardDeadlineMs - (Date.now() - started);
 
   const running = await store.latestJob(chatId);
-  if (running?.status === 'running' && Date.now() - Date.parse(running.updatedAt ?? '') < 2 * 60 * 1000) {
+  // Порог меньше максимального времени вызова (~30 с): убитая платформой задача
+  // не должна блокировать следующие запросы (ревью 2026-10-19).
+  const STALE_JOB_MS = 45 * 1000;
+  if (running?.status === 'running' && Date.now() - Date.parse(running.updatedAt ?? '') < STALE_JOB_MS) {
     await send(chatId, `⏳ Сводка уже собирается (задача ${running.id}). Дождись результата.`);
     return;
   }
@@ -96,6 +100,7 @@ async function runDigest(chatId) {
   let sentChunks = 0;
   let totalChunks = 0;
   let jobDone = false;
+  let slowPlan = []; // медленные источники: собираются после отправки сводки
   const status = await statusHandle(chatId, '🔎 Собираю ленту…');
   await typing(chatId);
   try {
@@ -103,35 +108,56 @@ async function runDigest(chatId) {
     await store.retentionPass(chatId, config.retention).catch((error) => console.warn('retention:', error?.message ?? error));
 
     const allSources = await store.listActiveSources(chatId);
-    const supported = allSources.filter((row) => row.kind !== 'html');
-    const unsupported = allSources.filter((row) => row.kind === 'html').map((row) => row.url);
-    // Ротация: за один вызов трогаем не больше maxSourcesPerRun, курсор — в БД.
-    // Так 60+ источников собираются за несколько запросов, а не ломают таймаут.
-    const cursorRow = await store.getFsm('collect:cursor');
-    let cursor = 0;
-    try {
-      cursor = Number(JSON.parse(cursorRow?.data ?? '{}').value) || 0;
-    } catch {
-      cursor = 0;
-    }
-    const perRun = Math.max(1, budget.maxSourcesPerRun ?? 16);
-    const rotated = supported.length > perRun
-      ? [...supported.slice(cursor % supported.length), ...supported.slice(0, cursor % supported.length)].slice(0, perRun)
-      : supported;
-    const nextCursor = supported.length ? (cursor + rotated.length) % supported.length : 0;
-    await store.setFsm('collect:cursor', 'cursor', { value: nextCursor }).catch(() => {});
-    const collected = await collectAll(rotated, { deadlineMs: Math.max(4000, Math.min(budget.collectDeadlineMs, left() - 14000)) });
+    // html собирается как обычный источник (lib/html.js) — неподдерживаемых типов больше нет,
+    // но форма списка сохранена: футер сводки по-прежнему строится из него.
+    const unsupported = [];
+    // Ротация с приоритетом скорости: быстрые (rss/twitter) вперёд, медленные
+    // (каналы через зеркало до 12 с, html-страницы до 7 с) — не больше двух за вызов.
+    // Так вызов не выходит за 30 с, а все источники получают свой черёд.
+    const collectedSkipped = [];
+    const fast = allSources.filter((row) => row.kind === 'rss' || row.kind === 'twitter');
+    const slow = allSources.filter((row) => row.kind !== 'rss' && row.kind !== 'twitter');
+    const readCursor = async (key) => {
+      const row = await store.getFsm(key);
+      try {
+        return Number(JSON.parse(row?.data ?? '{}').value) || 0;
+      } catch {
+        return 0;
+      }
+    };
+    const rotate = (list, cursor, limit) => (list.length > limit
+      ? [...list.slice(cursor % list.length), ...list.slice(0, cursor % list.length)].slice(0, limit)
+      : list);
+    const fastCursor = await readCursor('collect:cursor');
+    const slowCursor = await readCursor('collect:slow');
+    const fastBatch = rotate(fast, fastCursor, budget.maxSourcesPerRun ?? 12);
+    await store.setFsm('collect:cursor', 'cursor', { value: fast.length ? (fastCursor + fastBatch.length) % fast.length : 0 }).catch(() => {});
+    // Медленные (каналы через зеркало до 12 с, html-страницы) в сводку этого вызова
+    // не идут: их сбор — отдельный шаг после отправки, чтобы не отнимать время у LLM.
+    slowPlan = slow.length ? rotate(slow, slowCursor, 1) : [];
+    const rotated = fastBatch;
+    const collected = await collectAll(rotated, {
+      deadlineMs: Math.max(3000, Math.min(budget.collectDeadlineMs, left() - 14000)),
+      retries: 1, // на ретраи нет бюджета: быстрый отказ лучше потерянных секунд
+    });
 
+    collected.partial.push(...collectedSkipped);
     const window = digestWindow({ nowMs: Date.now(), lastSentAt: await store.getLastSentAt(chatId), windowDays: config.digest.windowDays, firstWindowHours: config.digest.firstWindowHours });
     // Кандидаты — ВСЁ за последние 7 дней, а не только после прошлой сводки:
     // непоместившиеся в лимит 45 пунктов должны попасть в следующую (P0 ревью 2026-10-19).
     const eligibilityMs = Date.now() - config.digest.windowDays * 24 * 60 * 60 * 1000;
     const rows = await store.pendingRows(chatId, eligibilityMs);
     const consumed = await store.consumedKeys(chatId);
+    // Мало времени — режем вход и выход, но сводку всё равно отдаём:
+    // пустой ответ хуже короткого (ревью 2026-10-19).
+    const tight = left() < 20000;
+    const caps = tight
+      ? { perSource: 2, maxItems: 10, maxChars: 12000, maxTokens: 3000 }
+      : { perSource: budget.perSource, maxItems: budget.maxItems, maxChars: budget.maxChars, maxTokens: budget.maxTokens };
     const { selected } = selectPending(rows, {
-      perSource: budget.perSource,
-      maxItems: budget.maxItems,
-      maxChars: budget.maxChars,
+      perSource: caps.perSource,
+      maxItems: caps.maxItems,
+      maxChars: caps.maxChars,
       consumedUrls: consumed.urls,
       consumedTitles: consumed.titles,
     });
@@ -141,26 +167,20 @@ async function runDigest(chatId) {
     if (!selected.length) {
       await status.close();
       const notes = [];
-      if (collected.errors.length) notes.push(`⚠ Не удалось собрать ${collected.errors.length} источник(ов): ${collected.errors.map((e) => e.url).join(', ')}`);
-      if (unsupported.length) notes.push(`ℹ️ Не собираются: ${unsupported.join(', ')}`);
+      if (collected.errors.length) notes.push(`⚠ Не удалось собрать ${collected.errors.length} источник(ов): ${collected.errors.map((e) => escapeHtml(e.url)).join(', ')}`);
+      if (unsupported.length) notes.push(`ℹ️ Не собираются: ${unsupported.map((url) => escapeHtml(url)).join(', ')}`);
+      if (collected.partial.length) notes.push(`ℹ️ Собрано неполно: ${collected.partial.length} источник(ов)`);
       await send(chatId, [EMPTY_TEXT, ...notes].join('\n\n'));
       await store.setJob(jobId, { status: 'done', stage: 'empty', detail: 'новостей нет' });
       jobDone = true;
       return;
     }
 
-    if (left() < 12000) {
-      await status.close();
-      await send(chatId, `⏳ Собрал ${plural(selected.length, 'пункт', 'пункта', 'пунктов')}, но на анализ уже не хватает времени вызова. Напиши «сводка» ещё раз — новости сохранены и никуда не денутся.`);
-      await store.setJob(jobId, { status: 'failed', stage: 'deadline', detail: 'не хватило бюджета на LLM' });
-      jobDone = true;
-      return;
-    }
     await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')}…`);
     const summary = await summarize(formatItemsInput(selected, config.digest.textCap), await store.getInterests(chatId), null, {
       thinking: budget.thinking,
-      maxTokens: budget.maxTokens,
-      attempts: budget.attempts ?? 1,
+      maxTokens: caps.maxTokens,
+      attempts: 1,
     });
     const text = composeDigest({
       header: periodHeader(periodFrom, periodTo, config.tz.offsetMin),
@@ -188,6 +208,7 @@ async function runDigest(chatId) {
     jobDone = true;
     console.log(`сводка: ${selected.length} пунктов, ${collected.added} новых, ${Math.round((Date.now() - started) / 1000)} c`);
   } catch (error) {
+    console.error('runDigest упал:', error?.stack ?? error);
     await status.close();
     const reason = error instanceof LlmError ? error.message : String(error?.message ?? error);
     await store.setJob(jobId, { status: 'failed', stage: 'error', detail: reason.slice(0, 200) }).catch(() => {});
@@ -198,6 +219,24 @@ async function runDigest(chatId) {
   } finally {
     // Страховка от вечного «уже собирается»: но не перетираем уже завершённую задачу.
     if (!jobDone) await store.setJob(jobId, { status: 'failed', stage: 'aborted', detail: 'вызов прерван' }).catch(() => {});
+    // Медленный источник — после сводки: его пункты попадут в следующую.
+    if (slowPlan.length && left() > 8000) {
+      try {
+        const late = await collectAll(slowPlan, { deadlineMs: Math.min(6000, Math.max(2000, left() - 2000)), retries: 1 });
+        const slowCursorRow = await store.getFsm('collect:slow');
+        let slowCursor = 0;
+        try {
+          slowCursor = Number(JSON.parse(slowCursorRow?.data ?? '{}').value) || 0;
+        } catch {
+          slowCursor = 0;
+        }
+        const slowTotal = (await store.listActiveSources(chatId)).filter((row) => row.kind !== 'rss' && row.kind !== 'twitter').length;
+        await store.setFsm('collect:slow', 'cursor', { value: slowTotal ? (slowCursor + slowPlan.length) % slowTotal : 0 }).catch(() => {});
+        console.log(`медленный источник после сводки: +${late.added}`);
+      } catch (error) {
+        console.warn('медленный сбор после сводки не удался:', error?.message ?? error);
+      }
+    }
   }
 }
 
@@ -229,7 +268,10 @@ async function sendSources(chatId) {
 async function addSourceFromInput(chatId, input) {
   const detected = detectSource(input);
   if (!detected.kind) {
-    await send(chatId, `⚠️ ${escapeHtml(detected.reason ?? 'не понял')}. Пример: <code>https://example.com/feed.xml</code> или <code>@channel</code>`);
+    // Выходим из режима добавления, иначе все следующие сообщения уходят в него
+    // и обычные вопросы остаются без ответа (ревью 2026-10-19).
+    await store.clearFsm(String(chatId)).catch(() => {});
+    await send(chatId, `⚠️ ${escapeHtml(detected.reason ?? 'не понял')}. Режим добавления выключен. Пример: <code>https://example.com/feed.xml</code> или <code>@channel</code>`);
     return;
   }
   const config = await loadConfig();
@@ -269,6 +311,7 @@ async function answerQuestion(chatId, question) {
   try {
     answer = await ask({ question, context: context || 'лента за период пуста', history: await store.recentHistory(chatId, 10) });
   } catch (error) {
+    console.error('runDigest упал:', error?.stack ?? error);
     await status.close();
     const reason = error instanceof LlmError ? error.message : String(error?.message ?? error);
     await send(chatId, `⚠️ Не получилось ответить: ${escapeHtml(reason).slice(0, 300)}`);
