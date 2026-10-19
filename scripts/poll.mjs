@@ -45,6 +45,7 @@ try {
 
 log('старт, offset =', offset);
 let handled = 0;
+try {
 while (Date.now() < deadline) {
   const { status, data } = await tg('getUpdates', { offset, timeout: 50, allowed_updates: JSON.stringify(['message', 'callback_query']) });
   if (status === 409) {
@@ -78,9 +79,9 @@ while (Date.now() < deadline) {
   }
 }
 log('выход по бюджету, обработано', handled);
-
-// Самопродолжение: расписание GitHub (cron) на публичных репозиториях с частым
-// force-push то срабатывает, то нет — поэтому каждый прогон запускает следующий.
+} finally {
+// Самопродолжение в finally: обрыв цепочки = мёртвый бот. Cron GitHub на публичном
+// репозитории с частым force-push не срабатывает вовсе (проверено 2026-10-19).
 if (process.env.POLL_CHAIN !== '0' && process.env.DISPATCH_TOKEN) {
   const response = await fetch('https://api.github.com/repos/livbig/news/actions/workflows/poll.yml/dispatches', {
     method: 'POST',
@@ -92,4 +93,5 @@ if (process.env.POLL_CHAIN !== '0' && process.env.DISPATCH_TOKEN) {
     body: JSON.stringify({ ref: 'main' }),
   });
   log('следующий прогон поллера:', response.status === 204 ? 'запущен' : `GitHub ${response.status}`);
+}
 }
