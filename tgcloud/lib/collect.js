@@ -64,7 +64,31 @@ async function collectFeed(source, config) {
   return { added };
 }
 
+/** Зеркало публичных каналов в RSS: t.me недоступен с площадок датацентров
+ * (замер 2026-10-19: на платформе 4/4 канала NETWORK, локально — ок). */
+const TG_MIRROR = 'https://tg.i-c-a.su/rss/';
+
+async function collectChannelViaMirror(source, config) {
+  const channel = String(source.url).replace(/^@/, '').replace(/^https?:\/\/t\.me\//, '').replace(/^s\//, '').replace(/\/.*$/, '');
+  const body = await getText(`${TG_MIRROR}${channel}`, { retries: 1 });
+  if (!looksLikeFeed(body)) throw Object.assign(new Error('зеркало отдало не RSS'), { code: 'PARSE' });
+  let added = 0;
+  for (const entry of parseFeed(body)) {
+    if (await insertItem(source.id, entry)) added += 1;
+  }
+  return { added, partial: 'канал собран через RSS-зеркало (t.me недоступен с платформы)' };
+}
+
 async function collectChannel(source, config) {
+  try {
+    return await collectChannelDirect(source, config);
+  } catch (error) {
+    console.warn(`t.me недоступен (${error?.code ?? error?.name}), пробую зеркало: ${source.url}`);
+    return collectChannelViaMirror(source, config);
+  }
+}
+
+async function collectChannelDirect(source, config) {
   const channel = String(source.url).replace(/^@/, '').replace(/^https?:\/\/t\.me\//, '').replace(/^s\//, '').replace(/\/.*$/, '');
   let before = null;
   let added = 0;

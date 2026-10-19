@@ -22,6 +22,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Подготовить секреты модулей
+        run: node scripts/build-config.mjs
+        env:
+          CHAT_ID: ${{ inputs.chat_id }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
       - name: Собрать и отправить сводку
         run: node scripts/worker.mjs
         env:

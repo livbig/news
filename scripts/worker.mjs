@@ -38,11 +38,19 @@ async function status(text, messageId = null) {
 
 /** Эндпоинт платформы. Возвращает JSON-строку (CLI печатает `< "..."`). */
 function run(module, payload) {
-  const out = execFileSync('npx', ['--yes', CLI, 'run', module, JSON.stringify(payload)], {
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-    env: process.env,
-  });
+  let out;
+  try {
+    out = execFileSync('npx', ['--yes', CLI, 'run', module, JSON.stringify(payload)], {
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      env: process.env,
+    });
+  } catch (error) {
+    // stderr CLI — единственный способ понять отказ платформы (нет снапшота, 401, ошибка модуля)
+    const raw = `${error.stdout ?? ''}\n${error.stderr ?? ''}`.trim();
+    const detail = raw.split(String.fromCharCode(10)).slice(-6).join(' | ');
+    throw new Error(`${module} не выполнился: ${detail.slice(0, 600)}`);
+  }
   const line = out.split('\n').reverse().find((l) => l.startsWith('< '));
   if (!line) throw new Error(`${module}: нет ответа от платформы\n${out.slice(-800)}`);
   return JSON.parse(JSON.parse(line.slice(2)));
@@ -65,7 +73,15 @@ let heartbeat = null;
 
 try {
   statusId = await status('🔎 Собираю ленту…');
-  const collected = run('endpoints/collect', { chatId, jobId });
+  // Две партии: rss (быстро) и tgweb (через зеркало, до 12 с на канал) — каждая в своём вызове.
+  const rss = run('endpoints/collect', { chatId, jobId, kind: 'rss' });
+  const tg = run('endpoints/collect', { chatId, kind: 'tgweb' });
+  const collected = {
+    sources: rss.sources + tg.sources,
+    added: rss.added + tg.added,
+    errors: [...rss.errors, ...tg.errors],
+    partial: [...rss.partial, ...tg.partial],
+  };
   log('сбор:', JSON.stringify(collected));
 
   await status(`🧠 Отбираю новости из ${plural(collected.sources, 'источника', 'источников', 'источников')}…`, statusId);
