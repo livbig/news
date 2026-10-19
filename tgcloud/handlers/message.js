@@ -231,6 +231,7 @@ async function runDigest(chatId, periodHint = null) {
       // Обрезка по max_tokens: вход не влез в выходной бюджет. Один повтор с половиной
       // пунктов (и те же лимиты) дешевле, чем честная ошибка вместо сводки.
       // Обрезанный текст лучше ошибки: он полон по смыслу, просто короче (пометка ниже).
+      console.log(`LLM обрезала ответ: частичный текст ${String(error?.partial ?? '').length} симв.`);
       if (error?.name === 'LlmTruncatedError' && String(error.partial ?? '').length > 400) {
         summary = String(error.partial);
         truncated = true;
