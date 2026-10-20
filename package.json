@@ -1,0 +1,18 @@
+{
+  "name": "news-tgcloud",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Агрегатор новостей на Telegram Serverless (tgcloud): сводка по запросу",
+  "scripts": {
+    "config": "node scripts/build-config.mjs",
+    "deploy": "node scripts/build-config.mjs && npx tgcloud push",
+    "status": "npx tgcloud status",
+    "run": "npx tgcloud run handlers/message",
+    "migrate": "npx tgcloud migrate",
+    "test": "node --test 'tests/js/*.test.js'"
+  },
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  }
+}

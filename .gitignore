@@ -1,0 +1,15 @@
+.env
+news.db
+logs/
+digests/
+__pycache__/
+.venv/
+bot.db
+.vercel/
+.kimi-code/plans/
+vpn.conf
+.DS_Store
+tgcloud/lib/secrets.js
+node_modules/
+.tgcloud/
+.secrets/
