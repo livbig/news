@@ -1,319 +1,149 @@
-# News Digest Pipeline
+# AGENTS.md — news (новостной дайджест в Telegram)
 
-Личный агрегатор новостей: источники (RSS/TG-каналы/HTML/X-мост/Reddit) →
-Supabase Postgres (М2; bot.db SQLite — архив/откат; RLS включён на всех
-public-таблицах, iter-19) → LLM-мега-дайджест (DeepSeek-V4.1-Flash
-`deepseek-flash`, effort=max — iter-19; до этого Z.ai GLM-5.3; iter-20:
-ретрай-лестница max→high при обрезке, LLM_MAX_TOKENS=96000) →
-Telegram-бот. ОДИН пользователь (D40): гейт `allowed()` на TELEGRAM_CHAT_ID
-+ outer-middleware на диспетчере (fail-closed, iter-19);
-мультипользовательность отклонена.
+Правила для людей и ИИ-агентов. Родительские правила — `../../AGENTS.md` и `../AGENTS.md`;
+при конфликте приоритет у этого файла. Язык документации, комментариев и сообщений — русский.
 
-Вся документация, комментарии и логи проекта — на русском; новые тексты
-(доки, комментарии, сообщения бота) тоже пиши по-русски.
+## 1. Что это и где работает
 
-## Структура кода
+Личный агрегатор новостей: RSS/TG-каналы/HTML/Reddit → отбор → LLM → сообщение в Telegram.
+Один пользователь (`TELEGRAM_CHAT_ID`), гейт fail-closed.
 
-- `bot/` — прод-бот (`python3 -m bot`, aiogram 3.x, long polling; И7/D24):
-  - `__main__.py` — вход: логирование, health-порт (только если задан
-    BOT_HEALTH_PORT, иначе не поднимается), retention на старте, без
-    TELEGRAM_TOKEN — разовый mock-прогон (сводка в stdout).
-  - `config.py` — вся конфигурация из env (см. `.env.example`); dev-токен
-    TELEGRAM_TOKEN_DEV приоритетнее прод-токена (D24).
-  - `db.py` — слой БД: Supabase Postgres, если задан SUPABASE_DB_URL; sqlite
-    `bot.db` иначе/при BOT_DB_PATH; ':memory:' в BOT_TEST_PG_URL — временная
-    схема в тестовом PG. iter-19: `consumed_keys` + фильтр в `pending_items`
-    — детерминированный анти-дедуп прямых повторов между сводками.
-  - `collect.py` — коллекторы всех типов: rss (+reddit-фиды D28), html (bs4),
-    tgweb (скрейпер t.me/s, R6), twitter (RSS-мост, N4). Изоляция отказов
-    (NFR-02): сбой одного источника — в лог и status='error', остальные
-    собираются.
-  - `collectors/http.py` — httpx + ретраи: сеть/5xx/429 → 3 повтора,
-    backoff 1→2→4 с, таймауты connect 15/read 30; прочие 4xx — сразу
-    исключение (A2, NFR-04). `err_code` (iter-18) — короткие коды причин
-    (HTTP_403/TIMEOUT/NETWORK/…): логи `FAIL url [КОД]`, sources.status_msg
-    начинается с `[КОД]`.
-  - Reddit (iter-18): VPN/датацентр-IP блокируются Reddit на уровне сети
-    (403 Blocked/429 на .rss) — при заданных REDDIT_CLIENT_ID/SECRET сбор
-    идёт через OAuth JSON API (collect.fetch_reddit_api, перевыпуск токена
-    по 401); без ключей — прежний .rss. Решение пользователя 2026-09-23:
-    Reddit НЕ парсим — оба источника (r/investing, r/wallstreetbets)
-    отключены (enabled=0); OAuth-код dormant.
-  - `digest.py` — сборка дайджеста: дельта окна потребления, вход для
-    mega-вызова, mock для dev-прогона.
-  - `llm.py` — SYSTEM_PROMPT дайджеста (согласован с пользователем дословно,
-    НЕ редактировать без пользователя), LLMError, suggest_sources; боевой
-    клиент — `pipeline/llm.py::_call` (стриминг, anthropic-messages;
-    iter-19 — DeepSeek).
-  - `enrich.py` — iter-14b: фоновая докачка полных текстов (trafilatura,
-    ленивый импорт), неудача — enriched=2, без ретраев.
-  - `interview.py` — LLM-интервью онбординга (11d/D45).
-  - `scheduler.py` — FSM-sweeper таймаутов (D17), двухфазный планировщик
-    слотов (D25) с catch-up (FR-12), collect_loop, retention_loop.
-  - `catalog.py` + `catalog_data.json` — fallback-каталог источников при
-    недоступной LLM (D45; кнопочные темы удалены).
-  - `handlers/` — роутеры: `onboarding.py` (интервью → профиль → подбор
-    источников → расписание), `sources.py` (CRUD + мастер добавления всех
-    типов), `settings.py` (расписание), `menu.py` (/digest, /stats,
-    «сводка сейчас»), `__init__.py` (Dispatcher, run;
-    `_AllowedOnlyMiddleware` — внешний гейт единственного пользователя
-    до роутеров, iter-19).
-  - `keyboards.py`, `states.py`, `tgsend.py` — клавиатуры (пагинация по 30),
-    FSM-состояния, отправка в Telegram (mock при chat_id=0 → stdout).
-- `pipeline/` — старый CLI-бот (код сохранён, откат И7): `run/digest/check/
-  chatid`, своя `news.db` (только на Mac), feeds.txt. Не путать с `bot/`.
-- `scripts/migrate_sqlite_to_pg.py` — одноразовый перенос bot.db → Supabase
-  (идемпотентен, ON CONFLICT DO NOTHING).
-- `tests/` — `test_iter1..7,10,11,18,19,20.py` + `fakes.py`; план — `TESTPLAN.md`
-  (приватный, не публикуется).
-- `docs/` — `requirements.md` (FR-01…20, NFR-01…07), `plan.md` (решения
-  D1…D55, схема БД, FSM), `reconciliation.md`.
-- `Dockerfile` — наследие HF Space (демонтирован 2026-09-19); не используется
-  в проде на Pi.
-- `LOG.md` — журнал итераций, обновлять при каждой итерации (новое сверху).
-- `.github/workflows/tests.yml` — единственный CI: unittest на sqlite и на
-  PG service container (deploy/keepalive удалены с демонтажем HF Space).
+- **Текущий прод — Telegram Serverless (`tgcloud/`)**, приложение `app8766943850`, приём
+  апдейтов через вебхук платформы. С 2026-10-19; вебхук восстановлен 2026-10-19 (iter-36).
+- **Python-контур (`bot/`, `pipeline/`) — путь отката**, не второй прод. Пока Serverless
+  активен, Python-бот не запускать: два потребителя апдейтов конфликтуют.
+  Исторические детали (Pi, launchd, mega-дайджест) — [`docs/legacy-python-bot.md`](docs/legacy-python-bot.md).
+- Состояние и остаток работ — [`docs/PROJECT-STATE.md`](docs/PROJECT-STATE.md).
 
-## Режим «мега-дайджест» (iter-11, 2026-09-15; план .kimi-code/plans/mega-digest)
+## 2. Структура
 
-- **Непрерывный сбор** (D44): фоновый `collect_loop` каждые
-  BOT_COLLECT_INTERVAL=1800 c собирает все источники (rss/html/twitter — пул
-  6 воркеров, tgweb строго последовательно с паузами); prep перед слотом —
-  только LLM. `/digest` и «сводка сейчас» собирают по-прежнему.
-- **Дайджест**: один mega-вызов (D42) — с iter-19 (2026-09-30) DeepSeek
-  `deepseek-flash` = V4.1-Flash (1М контекст, anthropic-эндпоинт
-  api.deepseek.com/anthropic; до этого Z.ai GLM-5.3), системный промпт
-  согласован дословно (bot/llm.py, не редактировать без пользователя; формат
-  заголовков/пунктов ревизован 2026-09-20: заголовки разделов капсом+эмодзи,
-  пункты без буллетов, пункт ≤~240 симв. и всегда короче источника, iter-15;
-  ревизия 2026-09-30: СИНТЕЗ — роль эксперта по экономике/политике/
-  инвестициям + строка о недопустимости прямых повторов, iter-19),
-  формат 3-4 сообщения, у каждого пункта эмодзи-ссылка на первоисточник
-  (D43); вход — per-source бюджет BOT_DIGEST_PER_SOURCE=15, кап
-  BOT_DIGEST_MAX_ITEMS=800 (window ROW_NUMBER); пункт идёт с «ВЫЖИМКА:»
-  (LLM-выжимка из items.gist) или «ТЕКСТ:» (выдержка ≤BOT_DIGEST_TEXT_CAP
-  из items.text), iter-14. iter-16: сбой LLM НЕ доставляет mock —
-  пользователь получает «⚠️ …проблема с LLM» с причиной (4xx — сразу,
-  5xx/таймаут/пустой text-блок — 2 попытки; _call логирует stop_reason/usage;
-  thinking-бюджет держать с запасом от LLM_MAX_TOKENS — инцидент 2026-09-21).
-  iter-17: первая строка дайджеста — детерминированный заголовок
-  «🎯 ГЛАВНОЕ ЗА ПЕРИОД (даты)» от кода (bot/digest.py::_period_header,
-  период = db.digest_period от users.last_sent_at; LLM лид форматировала
-  нестабильно — утечка метки «Лид:», пропавший заголовок).
-  iter-18: stop_reason=max_tokens = сбой (LLMTruncatedError), НЕ сводка —
-  инцидент 2026-09-23 (flash мыслила поверх budget_tokens, ушло 613 симв.);
-  gist (make_gist) и chat вызываются с thinking=False (thinking съедал малые
-  max_tokens — map-стадия теряла выжимки весь день); LLM_MAX_TOKENS=64000
-  (iter-20: 96000).
-  iter-20 (2026-10-01, инцидент: сводка 09:00 не пришла — effort=max дважды
-  выжег 64000 выходных токенов на thinking без текста): ретрай-лестница в
-  bot/llm.py — вторая попытка после LLMTruncatedError идёт с effort=high
-  (реплей боевого входа: max — 54.8k выходных токенов, high — 30.9k);
-  LLM_MAX_TOKENS=96000 (потолок модели 384K).
-  iter-19 (особенности DeepSeek): thinking ВКЛЮЧЁН по умолчанию —
-  `thinking=False` шлёт ЯВНЫЙ `{"type":"disabled"}`; `budget_tokens`
-  игнорируется, усилие мышления — LLM_EFFORT=max → `output_config.effort`
-  (low/high/max; решение пользователя — максимум); анти-дедуп прямых
-  повторов — `db.consumed_keys` (url+нормализованные заголовки прошлых
-  сводок, окно = жизнь items) + фильтр в `db.pending_items` (дубли внутри
-  выборки выигрывает свежая копия; развитие темы с другой формулировкой
-  не режется).
-- **Полные тексты (iter-14)**: TG-посты и content фидов пишутся в
-  items.text (кап BOT_ITEM_TEXT_CAP=4000); недостающее докачивается фоном
-  в collect_loop (bot/enrich.py: trafilatura, BOT_ENRICH_*) и сжимается
-  map-стадией в items.gist (BOT_MAP_*); попытки без ретраев (enriched=2).
-- **Онбординг = LLM-интервью** (D45): 5-8 раундов (bot/interview.py,
-  кнопки «Достаточно»/«Пропустить»), итог — профиль в `users.interests_text`
-  (читается промптом дайджеста), затем `llm.suggest_sources` → валидация
-  make_preview (rss/html параллельно, tgweb последовательно) → мультивыбор
-  40-60 источников с пагинацией. Fallback при недоступной LLM — дефолт-профиль
-  + весь bot/catalog_data.json (каталог больше не кнопочные темы).
-- **Добавление TG-каналов** (D48): @имя, t.me|telegram.me|dog, t.me/s/имя,
-  ссылка на пост; реплай-ссылки (t.me/+…) — отдельная ошибка; можно
-  переслать пост канала (форс tgweb).
-- **Retention** (D47): items через BOT_RETENTION_ITEMS_DAYS=10 дней →
-  надгробия `seen_hashes` (повторная вставка отбивается) и DELETE;
-  digests/chat_history/seen_hashes — BOT_RETENTION_DAYS=30 дней; проход
-  каждые 6 ч + на старте (`scheduler.retention_loop`).
-- **Лимит источников**: BOT_MAX_SOURCES=100 на чат (D46).
-- Миграция хостинга на Raspberry Pi выполнена 2026-09-19 (iter-12; план
-  `.kimi-code/plans/1789833048288-raspberry-pi-migration-plan.md`; решения
-  D49–D55) — см. «Прод-хостинг: Raspberry Pi».
+```
+tgcloud/                  ТЕКУЩИЙ прод (JS-модули, без npm в рантайме)
+  handlers/message.js     приём сообщений: гейт → интенты → сбор → отбор → LLM → отправка
+  handlers/callback_query.js  кнопки
+  lib/                    collect, rss, html, digest, llm, prompts, intents, interests,
+                          render, store, settings, telegram, text, tgparse
+  lib/secrets.js          СГЕНЕРИРОВАНО scripts/build-config.mjs из .env (gitignored)
+  schema.js               8 таблиц платформенной SQLite (без FK)
+bot/                      Python-бот (откат): aiogram 3.x, long polling, Supabase/sqlite
+pipeline/                 старый CLI (откат): run/digest/check/chatid, news.db, feeds.txt
+tests/test_iter*.py       Python-регрессия (162 теста по LOG iter-37)
+tests/js/*.test.js        JS-тесты текущего прода (102, проверено 20.10.2026)
+scripts/build-config.mjs  .env → tgcloud/lib/secrets.js
+scripts/migrate_sqlite_to_pg.py  bot.db → Supabase (идемпотентен)
+docs/                     требования, план, решения, миграция, ревью, legacy
+.kimi-code/plans/         исторические планы агентов (gitignored)
+Dockerfile                наследие HF Space, не используется
+vpn.conf                  WireGuard для отката на Pi (секрет, gitignored)
+```
 
-## Команды
+## 3. Команды
 
-- `python3 -m bot` — прод-бот (см. «Прод-хостинг»; без токена — mock-прогон).
-- `python3 -m pipeline run` — собрать новости в news.db
-- `python3 -m pipeline digest` — сформировать и отправить сводку (без токена TG — сохранить в digests/ и вывести в stdout)
-- `python3 -m pipeline check` — проверка здоровья всех фидов
-- `python3 -m pipeline chatid` — показать chat_id чатов, писавших боту (нужен доступ к api.telegram.org)
-- `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` —
-  регрессия на sqlite; без пустого префикса `:memory:` тестов идёт в PG
-  (docker `news-pg`, порт 54329; в CI — service container). Сейчас 153/153
-  (iter-20, 2026-10-01, sqlite Mac + PG docker news-pg + sqlite Pi).
-- `python3 scripts/migrate_sqlite_to_pg.py` — перенос bot.db → Supabase (идемпотентен)
+### Serverless (текущий прод)
 
-Лог работы: `LOG.md` — обновлять при каждой итерации.
+Перед первым запуском — `npm install`: без локального `@tgcloud/cli` команда `npx tgcloud`
+скачает из реестра чужой пакет `tgcloud` и упадёт с `unknown command 'status'`.
 
-## Тестирование
+```bash
+cd ~/Desktop/ai/self/news
+npm run config                 # .env → tgcloud/lib/secrets.js (значения не печатает)
+npm run status                 # npx tgcloud status: привязка, незадеплоенные модули
+npm test                       # node --test 'tests/js/*.test.js' — 102 теста
+npm run deploy                 # config + npx tgcloud push
+npx tgcloud migrate --safe     # схема БД; сначала --dry-run, если есть сомнения
+npm run run                    # npx tgcloud run handlers/message (локальный прогон хендлера)
+node scripts/verify-link.mjs   # проверка связки: токен бота, .tgcloud/credentials
+```
 
-- Инфраструктура (tests/TESTPLAN.md §1): синтетические `Update` подаются в
-  Dispatcher через `dp.feed_update` (без сети); `FakeBot(Bot)` перехватывает
-  `bot.__call__` и валидирует HTML parse_mode; все коллекторы и LLM гоняются
-  против локального fixture-сервера; реальные ключи из .env в тестах
-  обнуляются (config.TOKEN/ALLOWED_CHAT_ID — гейт в таком режиме открыт,
-  iter-19). Один Dispatcher на модуль — aiogram-роутеры не подключаются
-  повторно. Тесты с «боевым» TOKEN=test обязаны ставить и ALLOWED_CHAT_ID
-  (fail-closed, iter-19).
-- Два режима БД: sqlite (по умолчанию в CI) и Postgres через BOT_TEST_PG_URL
-  (`:memory:` → временная схема). Прогонять оба.
-- Приёмка диалоговых сценариев — ручная, в чате с dev-ботом
-  (@Testernewsbotbot, TELEGRAM_TOKEN_DEV); автоматизированных e2e нет.
+### Python-контур (откат)
 
-## GitHub / публикация (ВНИМАНИЕ)
+```bash
+python3 -m bot                 # прод-бот (без токена — mock-прогон)
+python3 -m pipeline run        # собрать новости в news.db
+python3 -m pipeline digest     # сводка (без токена — в digests/ и stdout)
+python3 -m pipeline check      # здоровье фидов
+BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"
+```
 
-- Локальная `main` — полная приватная история (LOG/AGENTS/docs/feeds/TESTPLAN).
-  **НЕ пушить её никуда.** Публикация — только через ветку `public` (orphan-снапшот
-  безопасных путей: bot/, pipeline/, tests/ без TESTPLAN.md, requirements.txt,
-  .github/, .gitignore, .env.example) в https://github.com/livbig/news (ПУБЛИЧНЫЙ;
-  у livbig Trade controls запрещает приватные репо).
-- Обновить публикацию (ветку public пересобирать ЦЕЛИКОМ через orphan):
-  `git checkout --orphan public2` → `git rm -rf --cached . -q` →
-  `git add bot pipeline tests requirements.txt .github .gitignore .env.example scripts` →
-  `git rm --cached -q tests/TESTPLAN.md` → commit → `git branch -M public` →
-  `git push -f origin public:main` → `git checkout -f main`.
-  НЕ делать `git checkout public` + add: worktree откатывается к СТАРОМУ
-  снапшоту (ошибка migr-2; ловится проверкой `git diff --stat HEAD main` до пуша
-  — в безопасных путях должен отличаться только TESTPLAN.md).
-- Аккаунт gh: ТОЛЬКО livbig — проект целиком в нём; другие gh-аккаунты вылогинены
-  из CLI (требование пользователя 2026-09-13). Git-креденшелы привязаны к
-  активному gh-аккаунту (`gh auth setup-git`) — при 403 проверить `gh auth status`.
-  Локальная git identity репо — livbig (глобальная ~/.gitconfig не трогается).
-- Перед каждым пушем — скан снапшота на идентификаторы (chat_id, @usernames,
-  /Users/, токен-паттерны): `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
+Локальный `python3` без `requirements.txt` тесты не пройдёт (нет `feedparser` и др.).
+Для Python-регрессии нужно окружение с зависимостями (Pi/venv); в этой сессии она
+**не прогонялась** — это указано в `PROJECT-STATE.md`.
 
-## Прод-хостинг: Raspberry Pi (с 2026-09-19; iter-12)
+## 4. Как работает Serverless-версия (границы платформы)
 
-- Прод: Raspberry Pi 4 в LAN, SSH `minibrick@192.168.88.73` (ключ ed25519 с
-  Mac; DHCP может сменить IP — при недоступности пересканировать: ping-свип /24
-  + `arp -a`, фильтр MAC-вендоров `dc:a6:32` и др.). Пользователь ОС —
-  `minibrick` (D54 переопределено пользователем: имя/hostname НЕ менялись),
-  hostname `minibrick`; sudo — NOPASSWD (`/etc/sudoers.d/010_pi-nopasswd`).
-- Юниты systemd (Pi): `awg0.service` — AmneziaWG full-tunnel, userspace
-  `awg-go` (v3.1.20260828, собран из github.com/amnezia-vpn, бинарник
-  `/usr/local/bin/awg-go`; repo.amnezia.org из РФ недоступен — apt-репозиторий
-  не использовался), `Restart=always`, конфиг `/etc/amnezia/amneziawg/awg0.conf`
-  (секреты! из `vpn.conf` Mac), kill-switch — nft-таблица `inet awgks`
-  (`awgks.nft` рядом; endpoint 195.58.46.21:9987 захардкожен в правила — при
-  смене endpoint править и конфиг, и nft), скрипты
-  `awg0-configure.sh`/`awg0-deconfigure.sh`; и `newsbot.service` —
-  `Requires=awg0.service`, `User=minibrick`,
-  `WorkingDirectory=/home/minibrick/news`, venv, `BOT_IP_PIN=0`,
-  `TZ=Europe/Moscow`, `Restart=always`.
-- Код на Pi: `/home/minibrick/news/` (bot/, pipeline/, tests/, venv/, `.env` —
-  ТОЛЬКО чистые `KEY=VALUE`, inline-комментарии load_env не срезает).
-  Обновление: с Mac
-  `rsync -a --exclude='__pycache__' -e ssh bot pipeline requirements.txt .env minibrick@192.168.88.73:news/`
-  (при изменении тестов — и `tests`) → `sudo systemctl restart newsbot`.
-- Логи: journald (`journalctl -u newsbot -f`, `-u awg0`) + `~/news/logs/run.log`;
-  ротация `/etc/logrotate.d/newsbot` (weekly, rotate 4, compress — SD-карта).
-- Kill-switch: при поднятом туннеле весь не-LAN/не-tunnel трафик дропается
-  (nft); краш awg-go → интерфейс исчезает, правила остаются, трафик НЕ утекает
-  в домашний IP (проверено kill -9: блокировка до автоперезапуска ~5 c).
-- Регрессия на Pi: `cd ~/news && BOT_TEST_PG_URL= venv/bin/python -m unittest
-  discover -s tests -p "test_iter*.py"` → 153/153 (2026-10-01, iter-20; до этого
-  149/149 на iter-19, 138/138 на iter-18); PG-смоук через туннель — OK.
-- Откат на Mac (cold standby): plist `com.fifth.newsbot` сохранён, launchd
-  disabled. Порядок: на Pi `sudo systemctl stop --now newsbot` (ЕДИНСТВЕННЫЙ
-  getUpdates) → на Mac `launchctl enable gui/501/com.fifth.newsbot` →
-  `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`.
-  Возврат на Pi: `launchctl bootout` + `disable` → `sudo systemctl start newsbot`.
-- HF Space: демонтирован 2026-09-19 (к запуску миграции Space уже не
-  существовал, GH secret `HF_TOKEN` и vars `HF_REPO_ID`/`HF_SPACE_HOST`
-  отсутствовали; workflows `deploy.yml`/`keepalive.yml` удалены, `tests.yml`
-  остался). Dockerfile в репо — наследие этого хостинга. Историческое.
-- Ручные CLI-прогоны pipeline (run/digest) — на Mac с остановленным агентом
-  (SQLite-блокировки, R5); news.db остаётся только на Mac, на Pi не запускать.
+- Один вызов платформы на сообщение. Лимиты: **~30 с wall time, ~3 с CPU**, нет `setTimeout`,
+  `setInterval`, `AbortSignal`, `res.body.getReader()`, конструктора `URL`.
+- Поэтому: быстрый сбор (rss/twitter) ≤ 16 источников за вызов, дедлайн ~5 с; отбор
+  ≤ 25 пунктов / 45k символов, per-source 4, окно 7 дней; LLM с **выключенным thinking**,
+  `max_tokens=5000` (iter-38); медленный источник (канал/сайт) — после отправки сводки,
+  в остаток бюджета, его пункты попадут в следующую.
+- `stop_reason=max_tokens` больше не роняет вызов: обрезанный ответ уходит как сводка с пометкой,
+  при пустом тексте — один повтор с половиной пунктов, затем честная ошибка.
+- Таймеров нет: «прогресс» — сообщение-статус между шагами, не стрим токенов.
+- Данные: платформенная SQLite (8 таблиц). Перенесены источники и профиль; история `items`
+  из Supabase **ещё не перенесена** (`docs/tgcloud-migration.md` §13).
+- HTML-источники: свой разбор (`lib/html.js`), без DOM/bs4; `URL` недоступен — ссылки
+  разбираются вручную.
 
-## Откат-наследие: launchd (историческое, для отката)
+Полная история решений и замеров — `docs/tgcloud-migration.md`; хронология — `LOG.md`.
 
-- Агент: `~/Library/LaunchAgents/com.fifth.newsbot.plist`, метка `com.fifth.newsbot`,
-  с 2026-09-13 запускает нового бота: `python3 -m bot` (миграция И7, решение D24).
-  С 2026-09-19 выключен (прод на Raspberry Pi; см. раздел выше):
-  `launchctl disable` + bootout; plist сохранён для отката.
-  2026-09-30: абсолютные пути в `plist` и `.bak` переписаны под перенос проекта
-  (`…/ai/news` → `…/ai/self/news`) — иначе команды отката ниже не сработали бы
-  (рабочий каталог не существовал). Состояние `disabled` сохранено, проверено
-  `launchctl print-disabled` и `launchctl list`.
-  Один потребитель getUpdates: перед ручным запуском бота останови прод-агента
-  (`sudo systemctl stop newsbot` на Pi), иначе 409.
-- Сводки per-user, двухфазно: подготовка (сбор + LLM) за 10 мин до слота,
-  отправка ровно в слот; расписание каждого чата — в `/settings` (bot.db,
-  `users.send_times`); после сна Mac — одна догоняющая сводка за всё окно.
-- Диалог: свободный текст боту (без команды) — вопрос к LLM с контекстом ленты
-  и историей чата (bot.db, chat_history).
-- Остановить агента (для отладки): `launchctl bootout gui/501/com.fifth.newsbot`
-- Запустить агент снова: `launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fifth.newsbot.plist`
-- Перезапуск после правок кода: `launchctl kickstart -k gui/501/com.fifth.newsbot`
-- Статус: `launchctl print gui/501/com.fifth.newsbot | grep state`
-- Логи: `logs/run.log` (основной, файловый хендлер бота), `logs/launchd.out`
-  (дубль stdout), `logs/launchd.err` (ранние крэши). Код правится прямо в `bot/` —
-  агент подхватывает изменения после перезапуска (kickstart).
-- Откат на старого бота (rollback И7): в plist `ProgramArguments` вернуть
-  `/opt/homebrew/bin/python3`, `-m`, `pipeline`, `bot` → `bootout` + `bootstrap`.
-  Код `pipeline/` сохранён (CLI run/digest/check живы); `news.db` и `bot.db`
-  раздельны — откат ничего не теряет.
-- Mini App (М3, FR-17): УДАЛЁН 2026-09-14 (cleanup-A/B/C: `bot/webapp.py`,
-  `bot/webauth.py`, `bot/pgstorage.py`, `api/`, `public/`, `vercel.json`).
-  Vercel-проект `news` и домен `news-livbig.vercel.app` удалены; web_app
-  меню-кнопка прод-бота сброшена на стандартную. Решение — отложить; возврат =
-  отдельная фаза 5 (активы: `debug_auth_log` в Supabase с реальным initData;
-  полная реализация в git-истории до `658281c`).
+## 5. Секреты и токены
 
-## Конфигурация
+Канонические файлы — вне репозитория (см. `../../docs/ENVIRONMENT.md`):
 
-- `feeds.txt` — строки `URL|категория` (для старого pipeline). Категории:
-  `metals_fx, usmarket, wsb, ipo_ai_bio, tech_ai, macro, geopolitics, crypto`
-- `.env` — ключи (полный список с комментариями в `.env.example`):
-  LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_THINKING, LLM_EFFORT,
-  LLM_MAX_TOKENS,
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_TOKEN_DEV (держать пустым в
-  проде — приоритетнее прод-токена), SUPABASE_DB_URL, BOT_* (интервалы,
-  бюджеты, retention), REDDIT_CLIENT_ID/SECRET/USER_AGENT (iter-18: OAuth
-  против сетевого блока .rss; пусто — прежний .rss). Зависимости —
-  `requirements.txt` (aiogram 3.31,
-  httpx, feedparser, beautifulsoup4, psycopg[binary] 3, trafilatura).
+| Что | Где | Зачем |
+|---|---|---|
+| `news.env` | `~/.config/ai/env/news.env` (в проекте симлинк `.env`) | LLM, Telegram, Supabase |
+| CLI Access token | `~/.config/ai/tgcloud/news-credentials.json` (симлинк `.tgcloud/credentials`) | `tgcloud push/migrate/run` |
+| Копия токена бота | `~/.config/ai/tgcloud/news-bot-token.txt` (симлинк `.secrets/bot-token.txt`) | `verify-link.mjs`, ручной вебхук, откат |
+| `vpn.conf` | в проекте, gitignored | откат Python-бота на Pi |
 
-## Критерии успеха (проверять при каждом изменении)
+- Токен бота (`12345:AA…`) и CLI-токен (`app<id>:<secret>`) — **разные**, не взаимозаменяемы.
+- При смене токена бота обновить и `news.env`, и `news-bot-token.txt`.
+- Секреты не печатать, не коммитить, не передавать в чат. Проверка — `bash ../../scripts/env.sh check`.
+- `GITHUB_*` в `news.env` — наследие удалённого воркера; текущий Serverless их не использует.
 
-1. Повторный `python3 -m pipeline run` не создаёт дублей (UNIQUE по url_hash от URL+заголовка).
-2. Каждый пункт сводки содержит ссылку на первоисточник (эмодзи-ссылка, D43); сводка на русском.
-3. Падение одного фида не валит прогон: ошибка пишется в logs/run.log с URL фида.
-4. Без LLM_API_KEY / TELEGRAM_TOKEN всё работает end-to-end (mock-сводка, вывод в stdout).
-5. Одно сообщение Telegram ≤ 4000 символов (разбиение по абзацам).
-6. Дайджест — один mega-вызов (D42); деградация LLM → 2 попытки → LLMError
-   с причиной: пользователю уходит «⚠️ Сводка не удалась…» (iter-16), mock —
-   только dev-прогон без ключа (stdout).
-7. Онбординг-интервью при недоступной LLM даёт fallback (дефолт-профиль + каталог).
-8. Retention: items >10 дней исчезают и не возвращаются (seen_hashes); старые digests/chat_history чистятся.
-9. `BOT_TEST_PG_URL= python3 -m unittest discover -s tests -p "test_iter*.py"` зелёный на sqlite и на PG.
-10. Прямые повторы новостей не попадают в сводку повторно (db.consumed_keys,
-    iter-19); развитие темы с новой формулировкой — не повтор.
-11. Чужой chat_id не получает от бота ничего (outer-middleware + allowed(),
-    fail-closed; D40/iter-19).
+## 6. Тестирование
 
-## Принципы
+- JS: `npm test` — 102 теста, зелёные (20.10.2026). Покрывают чанки, парсинг каналов,
+  интенты, окно/отбор, дедуп, рендер, гейт.
+- Python: `tests/test_iter*.py`, 162 по LOG iter-37. Требуют `requirements.txt`; в CI —
+  sqlite + PG service container. Не прогонять в одном процессе с ботом на той же БД.
+- Ручная приёмка диалогов — в чате с ботом; автоматизированного e2e нет.
+- Критерии успеха — старый список в `docs/requirements.md` и `docs/PROJECT-STATE.md`;
+  для Serverless добавились: один вызов ≤ 30 с, сводка не врёт про период, чужие chat_id
+  молчат (fail-closed), обрезка не убивает вызов.
 
-Следуй `~/Desktop/ai/karpathy-guidelines.md`: минимальный diff, никаких
-спекулятивных абстракций, каждое изменение сопровождается прогоном критериев выше.
+## 7. Публикация и git
 
-## Приоритеты пользователя (дефолт-профиль, до LLM-интервью онбординга)
+- Локальная `main` — полная приватная история (`LOG/AGENTS/docs/feeds/TESTPLAN`).
+  **Не пушить `main` никуда.**
+- Публикация — только ветка `public` (orphan-снапшот безопасных путей: `tgcloud/`, `bot/`,
+  `pipeline/`, `tests/` без `TESTPLAN.md`, `requirements.txt`, `package.json`, `.github/`,
+  `.gitignore`, `.env.example`) в `https://github.com/livbig/news` (ПУБЛИЧНЫЙ).
+- Пересборка `public` — целиком через orphan; проверка перед пушем:
+  `git diff --stat HEAD main` (в безопасных путях должен отличаться только `TESTPLAN.md`)
+  и скан на идентификаторы: `git grep -nE "603522950|cumulativenewsbot|/Users/|gho_"`.
+- Перед каждым пушем — скан снапшота на секреты и личные пути.
+- Аккаунт gh — только `livbig`; при 403 проверить `gh auth status`.
 
-- Глубоко: драгметаллы (Au, Pt, Pd), валюты (USD/RUB — главное; EUR, CNY,
-  JPY — в паре с USD), рынок США, инвест-идеи (вкл. wallstreetbets),
-  IPO и акции AI/робототехники/биотеха, новые AI-модели, промпт-инжиниринг
-- Кратко: геополитика (только направление, «в какую сторону весы»)
-- Очень кратко: крипта
+## 8. Красные линии
 
-После интервью профиль живёт в `users.interests_text` и подставляется в
-промпт дайджеста вместо дефолта (`bot/llm.py::DEFAULT_INTERESTS`).
+1. **Один потребитель апдейтов.** Не запускать Python-бот, пока активен вебхук Serverless,
+   и наоборот. Перед переключением — остановить второй контур.
+2. **Не пушить `main`.** Публикация — только `public`-снапшот.
+3. **Не коммитить** `.env`, `.secrets/`, `.tgcloud/`, `vpn.conf`, `*.db`, `logs/`, `digests/`,
+   `tgcloud/lib/secrets.js`, `node_modules/`.
+4. **Не менять системный промпт** без пользователя: `tgcloud/lib/prompts.js` и
+   `bot/llm.py::SYSTEM_PROMPT` согласованы дословно.
+5. **Не экономить на качестве сводки** без решения пользователя: `effort`/`max_tokens`
+   меняются осознанно, с замером.
+6. **Чужой chat_id не получает ничего** (fail-closed). Не ослаблять гейт.
+7. **Секреты** — только через канонические файлы; в логи и ответы не печатать.
+
+## 9. Документация
+
+- Изменилось поведение → обновить `docs/PROJECT-STATE.md` и `LOG.md` (новое сверху).
+- Новое решение → `docs/plan.md` (D-номера) или `docs/tgcloud-migration.md`.
+- Историю не выбрасывать: устаревшее переносится в `docs/legacy-*.md` с пометкой.
+- Ссылки на прод, тесты и лимиты проверять командой, а не по памяти.

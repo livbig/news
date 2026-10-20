@@ -1,5 +1,11 @@
 # Миграция news на Telegram Serverless (tgcloud) — Фаза 0
 
+> **Актуальные пути секретов (с 2026-10-20):** `.env` — симлинк на
+> `~/.config/ai/env/news.env`; `.tgcloud/credentials` — на
+> `~/.config/ai/tgcloud/news-credentials.json`; `.secrets/bot-token.txt` — на
+> `~/.config/ai/tgcloud/news-bot-token.txt`. Карта — `../../../docs/ENVIRONMENT.md`.
+> В разделах ниже описано, как файлы выглядели на момент миграции.
+
 Дата: 2026-10-19. Источник фактов: `core.telegram.org/bots/serverless` (скачан 2026-10-19)
 и рабочая практика `perimetr/assistant`. Код не писался — сначала матрицы и решения.
 
