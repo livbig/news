@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Новостной агрегатор</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>Новостной агрегатор</h1>
+    <span id="who" class="muted"></span>
+  </div>
+  <div class="actions">
+    <button id="collect" class="btn">Собрать сейчас</button>
+    <button id="digest" class="btn btn-primary">Сводка сейчас</button>
+  </div>
+</header>
+
+<section id="status" class="status">
+  <div class="card"><span class="label">Сбор</span><b id="last-collect">—</b></div>
+  <div class="card"><span class="label">Анализ</span><b id="last-analyze">—</b></div>
+  <div class="card"><span class="label">Сводка</span><b id="last-digest">—</b></div>
+  <div class="card"><span class="label">Следующая</span><b id="next-slot">—</b></div>
+  <div class="card"><span class="label">Модель</span><b id="model">—</b></div>
+</section>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="digests">Сводки</button>
+  <button class="tab" data-tab="sources">Источники</button>
+  <button class="tab" data-tab="interests">Интересы</button>
+  <button class="tab" data-tab="search">Поиск</button>
+</nav>
+
+<main>
+  <section id="tab-digests" class="tab-panel active">
+    <ul id="digested" class="list"></ul>
+    <article id="digest-view" class="digest-body muted">Выбери сводку слева.</article>
+  </section>
+
+  <section id="tab-sources" class="tab-panel">
+    <form id="source-form" class="form">
+      <input id="source-url" placeholder="URL RSS, @канал или страница" required>
+      <input id="source-title" placeholder="Название (необязательно)">
+      <button class="btn btn-primary" type="submit">Добавить</button>
+    </form>
+    <p id="sources-hint" class="muted small"></p>
+    <div class="table-wrap"><table id="sources">
+      <thead><tr><th>Источник</th><th>Тип</th><th>Всего</th><th>7 дней</th><th>Статус</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-interests" class="tab-panel">
+    <form id="interest-form" class="form">
+      <input id="interest-term" placeholder="Тема: золото, ФРС, AI-агенты…" required>
+      <button class="btn btn-primary" type="submit">Добавить тему</button>
+    </form>
+    <ul id="interests" class="chips"></ul>
+    <pre id="interests-text" class="profile"></pre>
+  </section>
+
+  <section id="tab-search" class="tab-panel">
+    <form id="search-form" class="form">
+      <input id="search-q" placeholder="Что искать в ленте" required>
+      <button class="btn" type="submit">Искать</button>
+    </form>
+    <ul id="search-results" class="list"></ul>
+  </section>
+</main>
+
+<footer class="foot muted small">
+  <span id="stats-line"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

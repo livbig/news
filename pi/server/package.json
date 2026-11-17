@@ -1,0 +1,18 @@
+{
+  "name": "news-server",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Новостной агрегатор на Raspberry Pi: сбор, анализ, мега-сводки 09:00/21:00, API и фронтенд",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test 'test/*.test.js'",
+    "collect": "node scripts/collect-now.mjs",
+    "digest": "node scripts/digest-now.mjs",
+    "seed": "node scripts/seed.mjs",
+    "sources": "node scripts/sources-status.mjs"
+  }
+}

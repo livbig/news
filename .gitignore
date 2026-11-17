@@ -9,7 +9,9 @@ bot.db
 .kimi-code/plans/
 vpn.conf
 .DS_Store
-tgcloud/lib/secrets.js
+_archive/tgcloud-2026-11-16/tgcloud/lib/secrets.js
 node_modules/
 .tgcloud/
 .secrets/
+restart.request
+fact-day-override
