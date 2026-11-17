@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const envPath = join(root, '.env');
-const outPath = join(root, 'tgcloud/lib/secrets.js');
+const outPath = join(root, '_archive/tgcloud-2026-11-16/tgcloud/lib/secrets.js');
 
 function parseEnv(text) {
   const env = {};
@@ -50,6 +50,6 @@ await writeFile(outPath, body, 'utf8');
 await chmod(outPath, 0o600);
 
 const state = Object.entries(secrets).map(([key, value]) => `${key}=${value ? 'задан' : 'ПУСТО'}`).join(' ');
-console.log(`tgcloud/lib/secrets.js: ${state}`);
+console.log(`_archive/tgcloud-2026-11-16/tgcloud/lib/secrets.js: ${state}`);
 if (!secrets.llmApiKey) console.warn('LLM_API_KEY пуст: сводка уйдёт в mock-режим');
 if (!secrets.allowedChatId) console.warn('TELEGRAM_CHAT_ID пуст: гейт закроет бота для всех (fail-closed)');

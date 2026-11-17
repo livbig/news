@@ -10,7 +10,7 @@ export const users = table('users', {
   chatId: integer('chat_id').primaryKey(),
   tzOffsetMin: integer('tz_offset_min').notNull().default(180),
   sendTimes: text('send_times').notNull().default('["09:00"]'),
-  lastSentAt: text('last_sent_at'),
+  lastSentAt: text('last_sent_at'), // историческое: окно обычной сводки — всегда 24 часа
   interestsText: text('interests_text'),
   createdAt: text('created_at').notNull(),
   onboardedAt: text('onboarded_at'),

@@ -120,14 +120,13 @@ export function sanitizeChunk(chunk, limit = 4000) {
     }
   }
   out += chunk.slice(last);
+  // Оборванный тег в конце (модель обрезалась на «<») — не тег, а мусор:
+  // Telegram иначе отвечает «Unclosed start tag» и теряет весь кусок.
+  const lastOpen = out.lastIndexOf('<');
+  if (lastOpen > out.lastIndexOf('>')) out = out.slice(0, lastOpen);
   const closers = stack.slice().reverse().map((tag) => `</${tag}>`).join('');
   if (out.length + closers.length <= limit) return out + closers;
   return out.replace(/<\/?(a|b|i)\b[^>]*>/gi, '');
-}
-
-/** Совместимость: прежнее имя из тестов. */
-export function balanceTags(blocks, limit = 4000) {
-  return blocks.map((block) => sanitizeChunk(block, limit)).filter((chunk) => chunk.trim());
 }
 
 /** Снять разметку, не съедая текст между «<» и «>» (например «доходность < 5%»). */
@@ -180,11 +179,6 @@ export function isoNow() {
 
 export function isoFromMs(ms) {
   return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
-}
-
-export function parseIso(value) {
-  const ms = Date.parse(String(value ?? ''));
-  return Number.isFinite(ms) ? ms : null;
 }
 
 /** «5 пункт(ов)» — чтобы тексты не выглядели машинными. */

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { route } from '../../tgcloud/lib/intents.js';
-import { parsePeriod } from '../../tgcloud/lib/digest.js';
+import { route } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/intents.js';
+import { parsePeriod } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/digest.js';
 
 const digest = (text) => assert.equal(route(text).kind, 'digest', text);
 const ask = (text) => assert.equal(route(text).kind, 'ask', text);

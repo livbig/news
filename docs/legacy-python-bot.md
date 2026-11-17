@@ -21,8 +21,10 @@ LLM-мега-дайджест (DeepSeek `deepseek-flash`, `effort=max`), Supabas
   (v3.1.20260828, собран из github.com/amnezia-vpn, бинарник `/usr/local/bin/awg-go`;
   repo.amnezia.org из РФ недоступен), `Restart=always`, конфиг
   `/etc/amnezia/amneziawg/awg0.conf` (секреты! из `vpn.conf` Mac), kill-switch — nft-таблица
-  `inet awgks` (`awgks.nft` рядом; endpoint 195.58.46.21:9987 захардкожен в правила — при смене
-  endpoint править и конфиг, и nft), скрипты `awg0-configure.sh`/`awg0-deconfigure.sh`;
+  `inet awgks` (`awgks.nft` рядом; выход разрешён по метке туннеля `meta mark 51820`, а не по
+  IP:порту endpoint — при смене сервера nft править не нужно), скрипты
+  `awg0-configure.sh`/`awg0-deconfigure.sh` (адрес интерфейса и DNS захардкожены там — при смене
+  конфига править и их);
   и `newsbot.service` — `Requires=awg0.service`, `User=minibrick`,
   `WorkingDirectory=/home/minibrick/news`, venv, `BOT_IP_PIN=0`, `TZ=Europe/Moscow`,
   `Restart=always`.

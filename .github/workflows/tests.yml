@@ -30,3 +30,9 @@ jobs:
         env:
           BOT_TEST_PG_URL: postgresql://postgres:postgres@localhost:5432/news
         run: python -m unittest discover -s tests -p "test_iter*.py"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install
+      - name: node --test (tgcloud)
+        run: npm test

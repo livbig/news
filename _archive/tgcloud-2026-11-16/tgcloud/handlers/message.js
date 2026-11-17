@@ -6,7 +6,8 @@
 import { botApi } from '../lib/telegram.js';
 import { gate, loadConfig } from '../lib/config.js';
 import { route } from '../lib/intents.js';
-import { EMPTY_TEXT, composeDigest, digestWindow, emptyPeriodText, formatItemsInput, parsePeriod, periodHeader, periodSpan, rowsInPeriod, selectPending, shortHistorySources } from '../lib/digest.js';
+import { EMPTY_TEXT, composeDigest, digestWindow, emptyPeriodText, parsePeriod, periodHeader, periodSpan, rowsInPeriod, rowsInRecent, selectPending, shortHistorySources } from '../lib/digest.js';
+import { summarizeDigest } from '../lib/digest-run.js';
 import { LlmError, ask, extractTerms, summarize } from '../lib/llm.js';
 import { addInterestTerms, clarifyTerms, containsWholeWords, countInterestSources, fallbackTerms, interestFsmKey, matchInterestTerms, parseInterests, parseTermList } from '../lib/interests.js';
 import { collectAll } from '../lib/collect.js';
@@ -14,8 +15,6 @@ import * as store from '../lib/store.js';
 import { chunkMessage, escapeHtml, isoFromMs, isoNow, plural } from '../lib/text.js';
 import { helpText, interestsListText, settingsText, statsText } from '../lib/render.js';
 import { detectSource, sourcesView } from '../lib/sources-ui.js';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export default async function onMessage(message) {
   const chatId = message?.chat?.id;
@@ -59,8 +58,8 @@ async function handleCommand(chatId, { command }) {
   if (command === 'start') {
     const interests = await store.getInterests(chatId);
     const hint = interests
-      ? 'Напиши «сводка» (или просто «ну как там») — соберу новости с прошлой сводки.'
-      : 'Напиши «сводка» — соберу новости с прошлой сводки (не больше 7 дней).';
+      ? 'Напиши «сводка» (или просто «ну как там») — соберу новости за последние сутки.'
+      : 'Напиши «сводка» — соберу новости за последние сутки.';
     await send(chatId, `🧿 <b>Агрегатор</b>\n\n${hint}`);
     await send(chatId, helpText(config.sources.max));
     return;
@@ -136,9 +135,9 @@ async function runDigest(chatId, periodHint = null) {
     // html собирается как обычный источник (lib/html.js) — неподдерживаемых типов больше нет,
     // но форма списка сохранена: футер сводки по-прежнему строится из него.
     const unsupported = [];
-    // Ротация с приоритетом скорости: быстрые (rss/twitter) вперёд, медленные
-    // (каналы через зеркало до 12 с, html-страницы до 7 с) — не больше двух за вызов.
-    // Так вызов не выходит за 30 с, а все источники получают свой черёд.
+    // Быстрая пачка — только rss/twitter. Каналы через зеркало и html-страницы
+    // могут отдать 429 или зависнуть на 10+ секунд, поэтому они идут после
+    // сводки, по два за вызов; их пункты попадут в следующую.
     const collectedSkipped = [];
     const fast = allSources.filter((row) => row.kind === 'rss' || row.kind === 'twitter');
     const slow = allSources.filter((row) => row.kind !== 'rss' && row.kind !== 'twitter');
@@ -157,36 +156,37 @@ async function runDigest(chatId, periodHint = null) {
     const slowCursor = await readCursor('collect:slow');
     const fastBatch = rotate(fast, fastCursor, budget.maxSourcesPerRun ?? 12);
     await store.setFsm('collect:cursor', 'cursor', { value: fast.length ? (fastCursor + fastBatch.length) % fast.length : 0 }).catch(() => {});
-    // Медленные (каналы через зеркало до 12 с, html-страницы) в сводку этого вызова
-    // не идут: их сбор — отдельный шаг после отправки, чтобы не отнимать время у LLM.
-    // Для сводки за период они не собираются вовсе (FR-9) — пункты уйдут в следующую,
-    // а в сводке об этом будет пометка (deferred), чтобы «собрано 0» не было ложью.
-    slowPlan = !explicit && slow.length ? rotate(slow, slowCursor, 1) : [];
+    // Каналы и html-страницы — после отправки сводки, по два за вызов: их сеть
+    // и разбор не должны отнимать время у LLM. На явный период они не собираются
+    // вовсе (FR-9), в сводке будет пометка (deferred).
+    slowPlan = !explicit && slow.length ? rotate(slow, slowCursor, 2) : [];
     const deferred = explicit ? slow.length : 0;
     const rotated = fastBatch;
+    const collectStarted = Date.now();
     const collected = await collectAll(rotated, {
       deadlineMs: Math.max(3000, Math.min(budget.collectDeadlineMs, left() - 14000)),
       retries: 1, // на ретраи нет бюджета: быстрый отказ лучше потерянных секунд
     });
+    console.log(`сбор: ${rotated.length} источников, +${collected.added}, ${Math.round((Date.now() - collectStarted) / 1000)} c, осталось ${Math.round(left() / 1000)} c`);
 
     collected.partial.push(...collectedSkipped);
     const window = explicit
       ? { fromMs: explicit.fromMs, toMs: explicit.toMs, capped: explicit.capped }
-      : digestWindow({ nowMs: Date.now(), lastSentAt: await store.getLastSentAt(chatId), windowDays: config.digest.windowDays, firstWindowHours: config.digest.firstWindowHours });
-    // Кандидаты — ВСЁ за последние 7 дней, а не только после прошлой сводки:
-    // непоместившиеся в лимит 45 пунктов должны попасть в следующую (P0 ревью 2026-10-19).
-    const eligibilityMs = explicit ? explicit.fromMs : Date.now() - config.digest.windowDays * DAY_MS;
+      : digestWindow({ nowMs: Date.now(), lastSentAt: null, windowDays: config.digest.defaultWindowDays, firstWindowHours: config.digest.firstWindowHours });
+    // Обычная «сводка» — всегда последние сутки (решение владельца 2026-10-24).
+    // Явный период («за 3 дня», «за неделю») по-прежнему ограничен 7 днями.
+    const eligibilityMs = explicit ? explicit.fromMs : window.fromMs;
     const candidates = await store.pendingRows(chatId, eligibilityMs);
-    // Явный период: верхняя граница работает только у закрытого окна (конец в прошлом),
-    // иначе отсекалось всё, что этот же вызов только что собрал (P0 ревью 2026-10-19).
-    const rows = explicit ? rowsInPeriod(candidates, explicit) : candidates;
+    // Явный закрытый период фильтруется по published; открытый и обычная сводка —
+    // по свежести published, чтобы фид не приносил старую статью как «новость за сутки».
+    const rows = explicit && !explicit.openEnd ? rowsInPeriod(candidates, explicit) : rowsInRecent(candidates, window.fromMs);
     // FR-3: история источника короче запрошенного периода — честная пометка в сводке.
     const shortHistory = explicit ? shortHistorySources(candidates, window.fromMs) : [];
     // FR-2: явный период не вычитает отправленное ранее — повтор даёт тот же набор.
     const consumed = explicit ? { urls: new Set(), titles: new Set() } : await store.consumedKeys(chatId);
     // Мало времени — режем вход и выход, но сводку всё равно отдаём:
     // пустой ответ хуже короткого (ревью 2026-10-19).
-    const tight = left() < 20000;
+    const tight = left() < 15000;
     const caps = tight
       ? { perSource: 2, maxItems: 10, maxChars: 12000, maxTokens: 3000 }
       : { perSource: budget.perSource, maxItems: budget.maxItems, maxChars: budget.maxChars, maxTokens: budget.maxTokens };
@@ -219,40 +219,17 @@ async function runDigest(chatId, periodHint = null) {
 
     await status.set(`🧠 Думаю над ${plural(selected.length, 'пунктом', 'пунктами', 'пунктами')}…`);
     const interestsText = await store.getInterests(chatId);
-    let summary;
-    let truncated = false;
-    try {
-      summary = await summarize(formatItemsInput(selected, config.digest.textCap), interestsText, null, {
-        thinking: budget.thinking,
-        maxTokens: caps.maxTokens,
-        attempts: 1,
-      });
-    } catch (error) {
-      // Обрезка по max_tokens: вход не влез в выходной бюджет. Один повтор с половиной
-      // пунктов (и те же лимиты) дешевле, чем честная ошибка вместо сводки.
-      // Обрезанный текст лучше ошибки: он полон по смыслу, просто короче (пометка ниже).
-      console.log(`LLM обрезала ответ: частичный текст ${String(error?.partial ?? '').length} симв.`);
-      if (error?.name === 'LlmTruncatedError' && String(error.partial ?? '').length > 400) {
-        summary = String(error.partial);
-        truncated = true;
-      } else if (error?.name !== 'LlmTruncatedError' || left() < 12000 || selected.length < 6) throw error;
-      const half = selected.slice(0, Math.max(5, Math.floor(selected.length / 2)));
-      console.log(`LLM обрезала ответ, повтор с ${half.length} пунктами`);
-      summary = await summarize(formatItemsInput(half, config.digest.textCap), interestsText, null, {
-        thinking: budget.thinking,
-        maxTokens: caps.maxTokens,
-        attempts: 1,
-      });
-      selected.splice(half.length);
-    }
+    const generated = await summarizeDigest({ selected, interestsText, config, budget, caps, left, summarize });
+    const summary = generated.note ? `${generated.text}\n\n${generated.note}` : generated.text;
+    // В прочитанное попадает только то, что реально ушло в успешные части.
+    const usedItems = generated.items ?? selected;
     // FR-3: если набор совпал с прошлой сводкой — честная пометка вместо тишины.
-    // Честная пометка: текст полный по смыслу, но модель не дописала до конца.
-    if (truncated) summary += '\n\n⚠️ Сводка сокращена: ответ не влез в лимит вызова.';
-    const sameAs = explicit ? await previousDigestAt(chatId, selected) : null;
+    const sameAs = explicit ? await previousDigestAt(chatId, usedItems) : null;
     const text = composeDigest({
       header: periodHeader(periodFrom, periodTo, tzOffsetMin),
       summary,
       capped: window.capped,
+      capText: explicit ? undefined : 'показаны новости за последние сутки — более старое не берётся',
       sameAs,
       tzOffsetMin,
       errors: collected.errors,
@@ -273,11 +250,11 @@ async function runDigest(chatId, periodHint = null) {
       sentChunks = sent;
       if (sent === 1) await status.close();
     }
-    await store.recordDigest(chatId, { periodFrom, periodTo, text, itemIds: selected.map((row) => row.id) }, { moveAnchor: !explicit });
+    await store.recordDigest(chatId, { periodFrom, periodTo, text, itemIds: usedItems.map((row) => row.id) });
     await store.appendHistory(chatId, 'assistant', text);
-    await store.setJob(jobId, { status: 'done', stage: 'sent', detail: `${plural(selected.length, 'пункт', 'пункта', 'пунктов')}, ${plural(sent, 'сообщение', 'сообщения', 'сообщений')}` });
+    await store.setJob(jobId, { status: 'done', stage: 'sent', detail: `${plural(usedItems.length, 'пункт', 'пункта', 'пунктов')}, ${plural(sent, 'сообщение', 'сообщения', 'сообщений')}` });
     jobDone = true;
-    console.log(`сводка: ${selected.length} пунктов, ${collected.added} новых, ${Math.round((Date.now() - started) / 1000)} c`);
+    console.log(`сводка: ${usedItems.length} пунктов, ${collected.added} новых, ${Math.round((Date.now() - started) / 1000)} c`);
   } catch (error) {
     console.error('runDigest упал:', error?.stack ?? error);
     await status.close();
@@ -313,7 +290,7 @@ async function runDigest(chatId, periodHint = null) {
 
 /** Отправка куска: сначала HTML, при отказе разметки — чистым текстом. */
 async function sendChunk(chatId, text, plain) {
-  const body = { chat_id: chatId, text: plain ? text.replace(/<[^>]+>/g, '') : text, link_preview_options: { is_disabled: true } };
+  const body = { chat_id: chatId, text: plain ? text.replace(/<[^>]+>/g, '').replace(/<[^>]*$/, '') : text, link_preview_options: { is_disabled: true } };
   if (!plain) body.parse_mode = 'HTML';
   try {
     return Boolean(await botApi('sendMessage', body));
@@ -497,7 +474,7 @@ async function answerQuestion(chatId, question, periodHint = null) {
     : digestWindow({
       nowMs: Date.now(),
       lastSentAt: null,
-      windowDays: config.digest.windowDays,
+      windowDays: config.digest.defaultWindowDays,
       firstWindowHours: config.digest.firstWindowHours,
     });
   // Закрытое окно («вчера», «с A по B») ограничивает ленту и сверху (P2-11): иначе на «что
@@ -516,7 +493,7 @@ async function answerQuestion(chatId, question, periodHint = null) {
   try {
     answer = await ask({ question, context: context || 'лента за период пуста', history: await store.recentHistory(chatId, 10) });
   } catch (error) {
-    console.error('runDigest упал:', error?.stack ?? error);
+    console.error('answerQuestion упал:', error?.stack ?? error);
     await status.close();
     const reason = error instanceof LlmError ? error.message : String(error?.message ?? error);
     await send(chatId, `⚠️ Не получилось ответить: ${escapeHtml(reason).slice(0, 300)}`);

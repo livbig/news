@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { looksLikeFeed, parseFeed } from '../../tgcloud/lib/rss.js';
+import { looksLikeFeed, parseFeed } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/rss.js';
 
 const RSS = `<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
 <item><title><![CDATA[Золото выросло]]></title><link>https://ex.com/a?utm=1</link>

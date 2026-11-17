@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { channelFromInput, parseChannelPage } from '../../tgcloud/lib/tgparse.js';
+import { channelFromInput, parseChannelPage } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/tgparse.js';
 
 const HTML = `<div class="tgme_widget_message_wrap" data-post="metals/101">
   <div class="tgme_widget_message_text js-message_text" dir="auto">Золото <b>пробило</b> 4000<br>Подробности позже</div>

@@ -7,8 +7,19 @@
 import { CHAT_SYSTEM_PROMPT, MOCK_NOTE, digestPrompt } from './prompts.js';
 import { normalizeLlmText } from './text.js';
 
-export class LlmError extends Error {}
-export class LlmTruncatedError extends LlmError {}
+export class LlmError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'LlmError';
+  }
+}
+
+export class LlmTruncatedError extends LlmError {
+  constructor(message) {
+    super(message);
+    this.name = 'LlmTruncatedError';
+  }
+}
 
 function maskSecrets(text) {
   return String(text ?? '')
@@ -180,7 +191,7 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress, e
         effort,
         onProgress,
       });
-      if (text.trim()) return normalizeLlmText(text);
+      if (text.trim()) return normalizeLlmText(text).trim();
       lastError = new LlmError('пустой ответ (только thinking-блоки?)');
     } catch (error) {
       if (error instanceof LlmError && /LLM API ошибка 4\d\d/.test(error.message)) throw error;
@@ -189,6 +200,8 @@ async function summarizeWith({ http, config, itemsText, interests, onProgress, e
     console.error(`LLM попытка ${attempt}/${maxAttempts} не удалась: ${lastError?.message}`);
     if (attempt < maxAttempts) await sleep(config.llm.retryPauseMs);
   }
+  // Обрезка — не «недоступность»: наверху есть частичный текст, который надо отдать.
+  if (lastError instanceof LlmTruncatedError) throw lastError;
   throw new LlmError(`LLM недоступна после ${maxAttempts} попыток: ${lastError?.message ?? '?'}`);
 }
 

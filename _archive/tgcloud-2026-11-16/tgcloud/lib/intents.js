@@ -147,8 +147,3 @@ function removeWord(text, index, length) {
   const to = nextSpace === -1 ? text.length : nextSpace;
   return `${text.slice(0, from)} ${text.slice(to)}`;
 }
-
-/** Команда = сводка по запросу (FR-19): /digest и /start после онбординга ведут туда же. */
-export function isDigestCommand(command) {
-  return command === 'digest';
-}

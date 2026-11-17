@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePeriod, rowsInPeriod } from '../../tgcloud/lib/digest.js';
+import { parsePeriod, rowsInPeriod } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/digest.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 // 12:00 MSK понедельника 19.10.2026 — от него считаются все окна.

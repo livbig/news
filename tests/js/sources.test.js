@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectSource, parseSourceCallback, sourcesView } from '../../tgcloud/lib/sources-ui.js';
+import { detectSource, parseSourceCallback, sourcesView } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/sources-ui.js';
 
 test('тип источника определяется по ссылке', () => {
   assert.deepEqual(detectSource('https://ex.com/feed.xml'), { kind: 'rss', url: 'https://ex.com/feed.xml' });

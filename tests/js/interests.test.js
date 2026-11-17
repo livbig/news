@@ -16,7 +16,7 @@ import {
   parseInterests,
   parseTermList,
   removeInterestTerm,
-} from '../../tgcloud/lib/interests.js';
+} from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/interests.js';
 
 const PROFILE = 'драгметаллы\nробототехника\nставка фрс\nставки по ипотеке';
 

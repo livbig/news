@@ -20,15 +20,14 @@ export async function collectAll(sources, { deadlineMs = 0, retries = null } = {
   const errors = [];
   const partial = [];
   let added = 0;
-  // Каналы — первыми и строго последовательно (как bot/collect.py): параллельные
-  // запросы к t.me/зеркалу ловят 429 и валят все каналы разом.
+  // Каналы идут через RSS-зеркало, но строго по одному: два параллельных
+  // запроса к зеркалу ловят HTTP 429 и теряют канал целиком (живой прогон 24.10).
   const channels = sources.filter((row) => row.kind === 'tgweb');
   const feeds = sources.filter((row) => row.kind !== 'tgweb');
-
-  // Сначала быстрые фиды (успевают всегда), потом каналы с остатком бюджета:
-  // если канал не влез по времени, новости из фидов всё равно в сводке.
-  await runPool(feeds, Math.max(1, Math.min(config.collect.workers, feeds.length || 1)));
-  await runPool(channels, 1);
+  await Promise.all([
+    runPool(feeds, Math.max(1, Math.min(config.collect.workers, feeds.length || 1))),
+    runPool(channels, 1),
+  ]);
 
   async function runPool(list, workers) {
     const queue = [...list];
@@ -106,15 +105,16 @@ async function collectChannelViaMirror(source, config) {
   for (const entry of parseFeed(body)) {
     if (await insertItem(source.id, entry)) added += 1;
   }
-  return { added, partial: 'канал собран через RSS-зеркало (t.me недоступен с платформы)' };
+  return { added };
 }
 
 async function collectChannel(source, config) {
+  // Зеркало первым: прямой t.me с платформы отдаёт NETWORK и съедает 10+ секунд.
   try {
-    return await collectChannelDirect(source, config);
+    return await collectChannelViaMirror(source, config);
   } catch (error) {
-    console.warn(`t.me недоступен (${error?.code ?? error?.name}), пробую зеркало: ${source.url}`);
-    return collectChannelViaMirror(source, config);
+    console.warn(`зеркало недоступно (${error?.code ?? error?.name}), пробую t.me: ${source.url}`);
+    return collectChannelDirect(source, config);
   }
 }
 

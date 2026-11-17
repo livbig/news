@@ -40,21 +40,12 @@ export async function getTzOffsetMin(chatId) {
   return Number.isFinite(tz) ? tz : 180;
 }
 
-export async function getLastSentAt(chatId) {
-  const row = await db.select({ lastSentAt: users.lastSentAt }).from(users).where(eq(users.chatId, chatId)).get();
-  return row?.lastSentAt ?? null;
-}
-
 /** Профиль интересов переносим только если на платформе его ещё нет. */
 export async function setInterestsIfEmpty(chatId, text) {
   const current = await getInterests(chatId);
   if (current?.trim()) return false;
   await db.update(users).set({ interestsText: String(text).slice(0, 4000) }).where(eq(users.chatId, chatId)).run();
   return true;
-}
-
-export async function markOnboarded(chatId) {
-  await db.update(users).set({ onboardedAt: isoNow() }).where(eq(users.chatId, chatId)).run();
 }
 
 // --- источники -------------------------------------------------------------------
@@ -296,10 +287,9 @@ export async function consumedKeys(chatId) {
   return { urls, titles };
 }
 
-/** Фиксация сводки: digests → digest_items → users.last_sent_at (последним: окно едет за фактом отправки).
- * Сводка за явный период якорь НЕ двигает (FR-2): иначе следующая неявная сводка
- * начнётся с конца периода и пропустит более свежее. */
-export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds }, { moveAnchor = true } = {}) {
+/** Фиксация сводки: digests → digest_items. Окно обычной сводки больше не зависит
+ * от last_sent_at: это всегда последние сутки, поэтому якорь не двигаем. */
+export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds }) {
   const inserted = await db
     .insert(digests)
     .values({ chatId, periodFrom, periodTo, itemCount: itemIds.length, messageText: text.slice(0, 200000), createdAt: isoNow() })
@@ -310,7 +300,6 @@ export async function recordDigest(chatId, { periodFrom, periodTo, text, itemIds
   if (itemIds.length) {
     await db.insert(digestItems).values(itemIds.map((itemId) => ({ digestId, itemId }))).run();
   }
-  if (moveAnchor) await db.update(users).set({ lastSentAt: periodTo }).where(eq(users.chatId, chatId)).run();
   return digestId;
 }
 
@@ -374,8 +363,6 @@ export async function createJob(chatId) {
 
 export const setJob = (id, patch) =>
   db.update(jobs).set({ ...patch, updatedAt: isoNow() }).where(eq(jobs.id, id)).run();
-
-export const getJob = (id) => db.select().from(jobs).where(eq(jobs.id, id)).get();
 
 export async function latestJob(chatId) {
   return db.select().from(jobs).where(eq(jobs.chatId, chatId)).orderBy(desc(jobs.id)).limit(1).get();

@@ -1,6 +1,6 @@
 // Сборка входа сводки — чистые функции (без sdk): окно, отбор, формат, заголовок.
 // Семантика из Python-версии (bot/digest.py + db.pending_items, iter-19/21),
-// плюс решение пользователя 2026-10-19: окно не больше 7 дней.
+// Обычная сводка — 24 часа; явный период — до 7 дней (iter-39).
 
 import { escapeHtml, normalizeTitle, plural } from './text.js';
 
@@ -261,6 +261,16 @@ export function rowsInPeriod(candidates, period) {
   });
 }
 
+/** Свежесть по дате публикации для обычной сводки за сутки: старую статью,
+ * которую фид отдал только сейчас, не показываем как новость. Без даты —
+ * доверяем fetchedAt (парсер уже поставил «сейчас»). */
+export function rowsInRecent(rows, fromMs) {
+  return (rows ?? []).filter((row) => {
+    const ms = Date.parse(row.published ?? '');
+    return !Number.isFinite(ms) || ms >= fromMs;
+  });
+}
+
 /**
  * Источники, у которых самый старый пункт новее начала периода: историю за период они
  * не отдают (RSS с «последними 20»), и сводка по ним неполная (FR-3).
@@ -355,7 +365,7 @@ export function periodHeader(fromIso, toIso, tzOffsetMin = 180) {
   return `<b>🎯 ГЛАВНОЕ ЗА ПЕРИОД (${periodSpan(fromIso, toIso, tzOffsetMin)})</b>`;
 }
 
-export const EMPTY_TEXT = 'Новых с прошлой сводки нет. Можно попросить «сводка за неделю» — покажу всё за 7 дней.';
+export const EMPTY_TEXT = 'Новых новостей за последние сутки нет. Можно попросить «сводка за 3 дня» — покажу всё за этот период.';
 
 /** Футер о несобранных источниках: предупреждение в самой сводке, подробности — /sources. */
 export function degradedFooter(errors) {
@@ -370,9 +380,9 @@ export function degradedFooter(errors) {
  * deferred — сколько медленных источников в эту сводку не собирались (FR-9): молчать нельзя.
  * shortHistory — сколько источников не отдают историю за запрошенный период (FR-3).
  */
-export function composeDigest({ header, summary, capped = false, errors = [], partial = [], unsupported = [], deferred = 0, shortHistory = [], sameAs = null, tzOffsetMin = 180 }) {
+export function composeDigest({ header, summary, capped = false, capText = 'окно ограничено 7 днями — более старое не запрашивается', errors = [], partial = [], unsupported = [], deferred = 0, shortHistory = [], sameAs = null, tzOffsetMin = 180 }) {
   const notes = [];
-  if (capped) notes.push('окно ограничено 7 днями — более старое не запрашивается');
+  if (capped) notes.push(capText);
   if (sameAs) notes.push(`Это те же пункты, что в сводке от ${localDateTimeLabel(sameAs, tzOffsetMin)}`);
   if (deferred) notes.push(`каналы и страницы (${deferred}) в эту сводку не собирались — их пункты уйдут в следующую`);
   if (shortHistory.length) notes.push(`часть источников не отдаёт историю за период (${shortHistory.length}) — по ним сводка неполная`);
@@ -383,6 +393,109 @@ export function composeDigest({ header, summary, capped = false, errors = [], pa
   if (unsupported.length) notes.push(`не собираются: ${unsupported.map((url) => escapeHtml(url)).join(', ')} (тип источника пока не перенесён)`);
   const noteBlock = notes.length ? `\n\nℹ️ ${notes.join('; ')}.` : '';
   return `${header}\n\n${summary}${noteBlock}${degradedFooter(errors)}`;
+}
+
+/** Делит отобранные пункты на части для параллельных LLM-вызовов. */
+export function splitIntoParts(rows, parts = 2) {
+  const list = rows ?? [];
+  const count = Math.min(Math.max(1, Number(parts) || 1), list.length);
+  if (count <= 1) return list.length ? [list] : [];
+  const size = Math.ceil(list.length / count);
+  return Array.from({ length: count }, (_, index) => list.slice(index * size, (index + 1) * size)).filter((part) => part.length);
+}
+
+/** Редактор веера отдаёт лид, синтез и радар. Разделяем по первому маркеру,
+ * чтобы синтез остался в конце, а не перед разделами. */
+export function splitEditor(text) {
+  const source = String(text ?? '').trim();
+  if (!source) return { lead: '', tail: '' };
+  const marker = source.match(/<b>[^<]*(?:СИНТЕЗ|НА РАДАРЕ)[^<]*<\/b>/i);
+  if (!marker) return { lead: source, tail: '' };
+  return { lead: source.slice(0, marker.index).trim(), tail: source.slice(marker.index).trim() };
+}
+
+/** Склеивает части сводки, сохраняя номер исходной части (если первая упала).
+ * Две и больше частей подписываются обе: читатель видит, что это один длинный выпуск. */
+export function joinDigestParts(parts) {
+  const list = parts ?? [];
+  return list
+    .map((part, position) => {
+      const index = Number.isInteger(part?.index) ? part.index : position;
+      const text = String(part?.text ?? part ?? '');
+      const label = list.length > 1 || index > 0;
+      return label ? `<b>— ЧАСТЬ ${index + 1} —</b>\n\n${text}` : text;
+    })
+    .join('\n\n');
+}
+
+
+/** Каноническая категория раздела: «AI-МОДЕЛИ И ИНФРАСТРУКТУРА» и
+ * «AI-МОДЕЛИ И ИНСТРУМЕНТЫ» — один раздел, а не два. */
+function sectionKey(title) {
+  const key = String(title ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const rules = [
+    [/^ai|^ии(?:\s|$)/, 'ai'],
+    [/^ipo|^биотех|робот|физическ/, 'ipo'],
+    [/^рынок сша|^акции сша|^s p|^nasdaq/, 'us'],
+    [/^валют|^доллар|^евро|^юань/, 'fx'],
+    [/^драгметалл|^металл|^сырь|^золот|^серебр/, 'metals'],
+    [/^крипт|^bitcoin|^биткоин/, 'crypto'],
+    [/^геополит|^мир(?:\s|$)/, 'geo'],
+    [/^макро|^цб|^ставк|^регулирован/, 'macro'],
+    [/^энерг|^нефт|^газ/, 'energy'],
+    [/^инвест/, 'invest'],
+    [/^проч|^технолог/, 'other'],
+  ];
+  return rules.find(([re]) => re.test(key))?.[1] ?? key;
+}
+
+/** Склеивает одинаковые разделы из двух частей веера: «ВАЛЮТЫ» из части 1
+ * и «ВАЛЮТЫ» из части 2 становятся одним разделом. Метки частей убираются,
+ * лид остаётся сверху, синтез/радар — в конце. */
+export function mergeSections(text) {
+  const source = String(text ?? '').replace(/<b>— ЧАСТЬ \d+ —<\/b>\s*/g, '').trim();
+  const heading = /^<b>([^<]+)<\/b>\s*$/gm;
+  const matches = [...source.matchAll(heading)];
+  if (!matches.length) return source;
+  const keyOf = sectionKey;
+  const special = new Set(['лид', 'синтез', 'на радаре']);
+  const preface = [source.slice(0, matches[0].index).trim()].filter(Boolean);
+  const groups = [];
+  const byKey = new Map();
+  const tail = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const start = matches[i].index;
+    const end = i + 1 < matches.length ? matches[i + 1].index : source.length;
+    const title = matches[i][1].trim();
+    const body = source.slice(start + matches[i][0].length, end).trim();
+    const key = keyOf(title);
+    if (special.has(key)) {
+      if (key === 'лид') preface.push(`<b>${title}</b>\n${body}`);
+      else tail.push(`<b>${title}</b>\n${body}`);
+      continue;
+    }
+    let group = byKey.get(key);
+    if (!group) {
+      for (const [otherKey, other] of byKey) {
+        if (Math.min(otherKey.length, key.length) >= 6 && (otherKey.startsWith(key) || key.startsWith(otherKey))) {
+          group = other;
+          break;
+        }
+      }
+    }
+    if (!group) {
+      group = { title, bodies: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    if (title.length > group.title.length) group.title = title;
+    group.bodies.push(body);
+  }
+  return [
+    ...preface,
+    ...groups.map((group) => `<b>${group.title}</b>\n${group.bodies.join('\n')}`),
+    ...tail,
+  ].filter(Boolean).join('\n\n').trim();
 }
 
 /** Пустой явный период (FR-11): цифры сбора честные — медленные источники отдельным счётом,

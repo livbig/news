@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseHtmlList } from '../../tgcloud/lib/html.js';
+import { parseHtmlList } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/html.js';
 
 // Фикстуры воспроизводят вёрстку реальных источников пользователя:
 // HN (таблица ссылок) и карточки новостей Yahoo Finance.
@@ -102,7 +102,7 @@ test('html: не больше 20 пунктов со страницы', () => {
 });
 
 test('absoluteUrl: query сохраняется, фрагмент срезается (без конструктора URL)', async () => {
-  const { absoluteUrl } = await import('../../tgcloud/lib/html.js');
+  const { absoluteUrl } = await import('../../_archive/tgcloud-2026-11-16/tgcloud/lib/html.js');
   assert.equal(absoluteUrl('https://e.com/a?x=1#f', 'https://b.com'), 'https://e.com/a?x=1');
   assert.equal(absoluteUrl('/item?id=1', 'https://news.ycombinator.com'), 'https://news.ycombinator.com/item?id=1');
   assert.equal(absoluteUrl('//cdn.com/a', 'https://b.com/x'), 'https://cdn.com/a');

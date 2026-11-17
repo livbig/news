@@ -85,3 +85,8 @@ export function digestPrompt(interests) {
   const profile = String(interests ?? '').trim() || DEFAULT_INTERESTS;
   return SYSTEM_PROMPT.replace('{INTERESTS_PROFILE}', profile);
 }
+
+// Веер: SYSTEM_PROMPT остаётся дословным, эти строки — user-префикс к <новости>.
+// Две части пишут только разделы, третья — общий лид, синтез и радар.
+export const FANOUT_SECTIONS_PREFIX = 'Напиши ТОЛЬКО разделы с пунктами по этим новостям. Каждый пункт — суть и короткий вывод (1–2 предложения), не просто заголовок. Не пиши лид, «СИНТЕЗ» и «НА РАДАРЕ».\n\n';
+export const FANOUT_EDITOR_PREFIX = 'Ниже весь поток за запрошенный период. Напиши ТОЛЬКО лид (2-3 предложения), затем блоки «🧠 СИНТЕЗ» и «👀 НА РАДАРЕ». Разделы с пунктами не пиши.\n\n';

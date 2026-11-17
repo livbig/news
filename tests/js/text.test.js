@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chunkMessage, escapeHtml, normalizeLlmText, normalizeTitle, urlHash } from '../../tgcloud/lib/text.js';
+import { chunkMessage, escapeHtml, normalizeLlmText, normalizeTitle, sanitizeChunk, urlHash } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/text.js';
 
 test('escapeHtml закрывает только & < >', () => {
   assert.equal(escapeHtml('a & b <c> "d"'), 'a &amp; b &lt;c&gt; "d"');
@@ -29,6 +29,11 @@ test('chunkMessage не превышает лимит и всё сохраняе
   assert.ok(chunks.length > 1);
   for (const chunk of chunks) assert.ok(chunk.length <= 1000, `кусок ${chunk.length}`);
   assert.equal(chunks.join('').replace(/\s+/g, ''), text.replace(/\s+/g, ''));
+});
+
+test('оборванный тег в конце куска не доходит до Telegram', () => {
+  assert.equal(sanitizeChunk('текст <'), 'текст ');
+  assert.equal(sanitizeChunk('текст <a href=https://x'), 'текст ');
 });
 
 test('chunkMessage не рвёт тег и entity', () => {

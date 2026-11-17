@@ -3,14 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Агрегатор новостей на Telegram Serverless (tgcloud): сводка по запросу",
+  "description": "Агрегатор новостей: архив контура Telegram Serverless (прод — pi/), сводка по запросу",
   "scripts": {
     "config": "node scripts/build-config.mjs",
-    "deploy": "node scripts/build-config.mjs && npx tgcloud push",
-    "status": "npx tgcloud status",
-    "run": "npx tgcloud run handlers/message",
-    "migrate": "npx tgcloud migrate",
-    "test": "node --test 'tests/js/*.test.js'"
+    "deploy": "node scripts/build-config.mjs && cd _archive/tgcloud-2026-11-16/tgcloud && npx tgcloud push",
+    "status": "cd _archive/tgcloud-2026-11-16/tgcloud && npx tgcloud status",
+    "run": "cd _archive/tgcloud-2026-11-16/tgcloud && npx tgcloud run handlers/message",
+    "migrate": "cd _archive/tgcloud-2026-11-16/tgcloud && npx tgcloud migrate",
+    "test": "node --test 'tests/js/*.test.js'",
+    "preview": "node scripts/preview-digest.mjs"
   },
   "devDependencies": {
     "@tgcloud/cli": "^0.2.0"

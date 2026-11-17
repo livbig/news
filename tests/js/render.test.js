@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { interestsListText } from '../../tgcloud/lib/render.js';
-import { chunkMessage } from '../../tgcloud/lib/text.js';
+import { interestsListText } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/render.js';
+import { chunkMessage } from '../../_archive/tgcloud-2026-11-16/tgcloud/lib/text.js';
 
 // P2-9: список интересов длиннее лимита Telegram — раньше уходил одним сообщением
 // и падал молча (пользователь не видел ничего). Режем тем же chunkMessage, что и сводку.
