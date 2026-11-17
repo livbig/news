@@ -1,0 +1,15 @@
+[Unit]
+Description=Новостной агрегатор: разовая задача (%i) от имени newsd
+After=network-online.target newsd.service
+
+[Service]
+Type=oneshot
+User=newsd
+Group=newsd
+WorkingDirectory=/srv/news/server
+EnvironmentFile=/etc/news/news.env
+Environment="NODE_OPTIONS=--experimental-sqlite --max-old-space-size=512"
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/news/server/scripts/%i.mjs
+StandardOutput=journal
+StandardError=journal

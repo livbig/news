@@ -1,0 +1,26 @@
+[Unit]
+Description=Новостной агрегатор — служба: сбор, анализ, сводки 09:00/21:00, API и фронтенд
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=newsd
+Group=newsd
+WorkingDirectory=/srv/news/server
+EnvironmentFile=/etc/news/news.env
+# node:sqlite в Node 22 за флагом; служба пишет базу, файл — единственный источник истины.
+Environment="NODE_OPTIONS=--experimental-sqlite --max-old-space-size=512"
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node src/main.js
+Restart=always
+RestartSec=5
+# Pi 4 ГБ: служба живёт рядом с ассистентом и Дворецким — не съедаем общую память.
+MemoryHigh=600M
+MemoryMax=1200M
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

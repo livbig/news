@@ -1,0 +1,9 @@
+[Unit]
+Description=Новостной агрегатор: бэкап каждую ночь в 03:55
+
+[Timer]
+OnCalendar=03:55
+Persistent=true
+
+[Install]
+WantedBy=timers.target

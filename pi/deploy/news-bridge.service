@@ -1,0 +1,41 @@
+[Unit]
+Description=Новостной агрегатор — Telegram-мост к pi (живой чат с владельцем)
+After=network-online.target newsd.service
+Wants=network-online.target newsd.service
+
+[Service]
+Type=simple
+# root нужен ровно для одного: запустить дочерний pi от uid зоны (см. bridge/src/zone-cli.js).
+User=root
+WorkingDirectory=/srv/news/bridge
+EnvironmentFile=/etc/news/news.env
+Environment="NODE_OPTIONS=--experimental-sqlite --max-old-space-size=512"
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PI_TG_LOG=info
+Environment=PI_TG_STATE_FILE=/srv/news/state.json
+Environment=PI_TG_LOG_DIR=/srv/news/logs
+Environment=PI_TG_DATA_DIR=/srv/news/users/livbig/work/files
+Environment=PI_TG_CWD=/srv/news/users/livbig/work
+Environment=PI_TG_CLI_PATH=/usr/bin/pi
+Environment=PI_TG_RICH=auto
+# Одна зона: владелец. Профиль задаёт каталоги, память, uid и права ОС.
+Environment=HELPER_ROOT=/srv/news
+Environment=HELPER_PROFILES=livbig:603522950:admin
+Environment=HELPER_OS_PREFIX=nw-
+# Инструменты агента ходят в службу, а не в базу напрямую: один писатель.
+Environment=NEWS_API_URL=http://127.0.0.1:8097
+Environment=PI_TG_IDLE_MS=600000
+Environment=PI_TG_MAX_IDLE_SESSIONS=1
+Environment=PI_TG_MAX_PROCESSES=2
+ExecStart=/usr/bin/node src/main.js
+Restart=always
+RestartSec=5
+MemoryHigh=1200M
+MemoryMax=2200M
+# NoNewPrivileges не ставим: агент зоны должен уметь `sudo systemctl restart newsd`
+# (объём прав задаёт /etc/sudoers.d/news-agent, а не флаг ядра: с флагом setuid-sudo не работает).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

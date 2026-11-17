@@ -1,0 +1,9 @@
+[Unit]
+Description=Новостной агрегатор: уборка каждую ночь в 04:20
+
+[Timer]
+OnCalendar=04:20
+Persistent=true
+
+[Install]
+WantedBy=timers.target

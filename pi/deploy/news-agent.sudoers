@@ -1,0 +1,13 @@
+# Агент зоны (nw-livbig) перезапускает службу новостей и смотрит её состояние без пароля.
+# Мост (root) и данные (newsd) агенту не подчиняются: только чтение кода моста.
+# «newsd*» — не опечатка: sudo сверяет аргументы буквально, поэтому «newsd», «newsd.service»
+# и «--no-pager» — три разные строки. Шаблон закрывает все три, но не чужие юниты.
+# news-task@* — разовые задачи newsd (collect-now, sources-status), см. pi/AGENTS.md §5.
+nw-livbig ALL=(root) NOPASSWD: /bin/systemctl restart newsd*, \
+                              /bin/systemctl start newsd*, \
+                              /bin/systemctl stop newsd*, \
+                              /bin/systemctl status newsd*, \
+                              /bin/systemctl is-active newsd*, \
+                              /bin/systemctl start news-task@*, \
+                              /bin/systemctl status news-task@*, \
+                              /bin/journalctl -u newsd*

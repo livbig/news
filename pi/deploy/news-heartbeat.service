@@ -1,0 +1,15 @@
+[Unit]
+Description=Новостной агрегатор: сторож контура
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/srv/news/app
+EnvironmentFile=/etc/news/news.env
+Environment="NODE_OPTIONS=--experimental-sqlite --max-old-space-size=256"
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /srv/news/app/scripts/heartbeat.mjs
+StandardOutput=journal
+StandardError=journal
