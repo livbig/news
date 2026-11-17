@@ -1,0 +1,19 @@
+{
+  "name": "news-agent-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Новостной агрегатор: память зоны (Дворецкий) + инструменты новостей",
+  "pi": {
+    "extensions": [
+      "./extensions/helper.js",
+      "./extensions/news.js"
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

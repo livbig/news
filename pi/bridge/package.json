@@ -1,0 +1,40 @@
+{
+  "name": "pi-telegram-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram bridge for pi: list, open and drive pi sessions from a Telegram chat",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "telegram",
+    "bot",
+    "sessions"
+  ],
+  "license": "MIT",
+  "bin": {
+    "pi-telegram-bridge": "./src/main.js"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/pi-telegram-bridge.ts"
+    ]
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/main.js",
+    "smoke": "node --env-file-if-exists=.env scripts/smoke.js",
+    "rehearse": "node --env-file-if-exists=.env scripts/rehearse.js",
+    "test": "node --test test/*.test.js",
+    "e2e": "node --test --test-timeout=120000 test/e2e/*.test.js"
+  },
+  "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
+    "grammy": "^1.46.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0"
+  }
+}
