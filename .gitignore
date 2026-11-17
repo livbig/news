@@ -15,3 +15,17 @@ node_modules/
 .secrets/
 restart.request
 fact-day-override
+
+# Данные и секреты: в git только код, тесты и доки (решение владельца 17.11.2026)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.jsonl
+*.pdf
+*.tar.gz
+*.tgz
+state.json
+backups/
+sessions/

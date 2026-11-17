@@ -39,7 +39,7 @@ test('строка лога: время, уровень, имя файла по 
 test('токен бота в лог не попадает', () => {
 	const dir = freshDir();
 	const textLog = createTextLog({ dir, now: () => NOW });
-	textLog.error('Bot API 401 для 123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw');
+	textLog.error('Bot API 401 для 123456789:AAexample-not-real-token-000000000');
 	const line = readFileSync(join(dir, 'bridge-2026-11-01.txt'), 'utf8');
 	assert.ok(!line.includes('AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw'), 'секрет замаскирован');
 	assert.match(line, /1234…/);
