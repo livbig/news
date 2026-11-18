@@ -4,12 +4,15 @@
 // Секреты не печатаются: только имена и признак «задан».
 
 import { readFile, writeFile, chmod } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const envPath = join(root, '.env');
-const outPath = join(root, '_archive/tgcloud-2026-11-16/tgcloud/lib/secrets.js');
+// Единый LLM-ключ живёт вне проекта: Mac — ~/.config/ai/env/llm.env, Pi — /etc/ai/llm.env.
+const sharedEnvPath = process.env.LLM_ENV_FILE || join(homedir(), '.config/ai/env/llm.env');
+const outPath = join(root, 'tgcloud/lib/secrets.js');
 
 function parseEnv(text) {
   const env = {};
@@ -26,7 +29,7 @@ function parseEnv(text) {
   return env;
 }
 
-const fromFile = parseEnv(await readFile(envPath, 'utf8').catch(() => ''));
+const fromFile = { ...parseEnv(await readFile(sharedEnvPath, 'utf8').catch(() => '')), ...parseEnv(await readFile(envPath, 'utf8').catch(() => '')) };
 // CI (воркер): .env нет, значения приходят переменными окружения — они приоритетнее.
 const fromEnv = Object.fromEntries(
   ['TELEGRAM_TOKEN', 'BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'CHAT_ID', 'LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL', 'GITHUB_REPO', 'GITHUB_DISPATCH_TOKEN', 'GITHUB_REF']
@@ -50,6 +53,6 @@ await writeFile(outPath, body, 'utf8');
 await chmod(outPath, 0o600);
 
 const state = Object.entries(secrets).map(([key, value]) => `${key}=${value ? 'задан' : 'ПУСТО'}`).join(' ');
-console.log(`_archive/tgcloud-2026-11-16/tgcloud/lib/secrets.js: ${state}`);
+console.log(`tgcloud/lib/secrets.js: ${state}`);
 if (!secrets.llmApiKey) console.warn('LLM_API_KEY пуст: сводка уйдёт в mock-режим');
 if (!secrets.allowedChatId) console.warn('TELEGRAM_CHAT_ID пуст: гейт закроет бота для всех (fail-closed)');
