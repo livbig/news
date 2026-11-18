@@ -76,7 +76,8 @@ def _call(system: str, messages: list[dict], max_tokens: int,
     stop_reason = usage = None  # iter-16: диагностика пустых/обрезанных ответов
     with httpx.stream(
         "POST",
-        f"{config.LLM_BASE_URL}/v1/messages",
+        # OpenRouter-база уже кончается на /v1 — второй раз не добавляем.
+        f"{config.LLM_BASE_URL.rstrip('/').removesuffix('/v1')}/v1/messages",
         headers={
             "Authorization": f"Bearer {config.LLM_API_KEY}",
             "anthropic-version": "2023-06-01",

@@ -19,6 +19,7 @@ def load_env(path=None):
         os.environ.setdefault(key.strip(), value.split(" #", 1)[0].strip())
 
 
+load_env(os.environ.get("LLM_ENV_FILE", Path.home() / ".config/ai/env/llm.env"))  # единый LLM-ключ
 load_env()
 
 DB_PATH = str(ROOT / "news.db")

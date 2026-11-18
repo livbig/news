@@ -122,7 +122,7 @@ async function call({ http, config, system, messages, maxTokens, thinking = true
 
   let response;
   try {
-    response = await http(`${String(config.llm.baseUrl).replace(/\/+$/, '')}/v1/messages`, {
+    response = await http(`${String(config.llm.baseUrl).replace(/\/+$/, '').replace(/\/v1$/, '')}/v1/messages`, {
       method: 'POST',
       // Свой потолок: зависший стрим иначе держит замок анализа навсегда.
       signal: AbortSignal.timeout(timeoutMs),
